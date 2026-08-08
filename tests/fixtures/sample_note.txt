@@ -1,0 +1,2 @@
+Patient John Smith, DOB 14/03/1982, presented to St Vincent's Hospital on 02/06/2026
+with chest pain. Contact number 0412 345 678. Attending physician: Dr. Sarah Chen.
