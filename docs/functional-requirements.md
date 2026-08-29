@@ -44,6 +44,7 @@ originating hospital, not inside it.
 | FR-6 | System shall produce a per-document audit record listing each detected entity's category, confidence score, and the action taken. |
 | FR-7 | System shall NOT retain any mapping capable of re-identifying a redacted entity. |
 | FR-8 | System shall document known limitations (e.g. contextual re-identification risk) rather than implying full anonymity guarantees. |
+| FR-9 | System shall additionally redact `PROFESSION`-type entities as a deliberate extension beyond Safe Harbor's 18 categories. Rationale logged in `decision-log.md`. |
 
 ## Success Criteria
 
