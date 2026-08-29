@@ -1,4 +1,4 @@
-from deid.redact import redact
+from src.deid.redact import redact
 from tests.fixtures.mock_entities import MOCK_ENTITIES, TEXT
 
 # Swap back once Comprehend Medical access is unblocked:
