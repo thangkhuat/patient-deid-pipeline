@@ -32,6 +32,15 @@ def redact(
     original. See docs/technical-requirements.md, "Redaction algorithm
     constraint" — worth sitting with this before writing the loop.
 
-    TODO: implement.
     """
-    raise NotImplementedError
+    sorted_entities = sorted(entities, key=lambda x:x['BeginOffset'], reverse=True)
+    redacted_text = text
+    audit_records = []
+    for entity in sorted_entities:
+        if entity['Score'] >= min_score:
+            redacted_text = redacted_text[0:entity['BeginOffset']] + f"[{entity['Type']}]" + redacted_text[entity['EndOffset']:]
+            audit_record = {"type": entity['Type'], "score": entity['Score'], "action": "redacted"}
+        else:
+            audit_record = {"type": entity['Type'], "score": entity['Score'], "action": "flagged_low_confidence"}
+        audit_records.append(audit_record)
+    return (redacted_text, audit_records)
