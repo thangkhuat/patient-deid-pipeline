@@ -110,3 +110,9 @@ this project, not a bug to fix. When helping here:
   owner writes the fix.
 - Diagnosing environment/tooling issues (like this file's own setup) is
   fine and welcome — that's a different thing from writing core logic.
+
+  AWS Comprehend Medical is currently blocked account-side (SubscriptionRequiredException,
+AWS Support case open). redact() is being built/tested against
+tests/fixtures/mock_entities.py in the meantime — see decision-log.md. detect.py
+remains a deliberate stub pending live AWS access; nothing here should be "fixed" by
+implementing it.
