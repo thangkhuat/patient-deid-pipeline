@@ -3,8 +3,8 @@
 See docs/technical-requirements.md, "Testing requirements".
 """
 
-from deid.redact import redact
-from fixtures.mock_entities import MOCK_ENTITIES, TEXT
+from src.deid.redact import redact
+from tests.fixtures.mock_entities import MOCK_ENTITIES, TEXT
 
 
 def test_no_safe_harbor_categories_leak_in_output():
