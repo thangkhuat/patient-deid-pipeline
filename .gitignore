@@ -9,3 +9,6 @@ venv/
 # tests/fixtures/ should only ever contain synthetic data.
 /data/
 *.real.txt
+
+# Local agent guidance - kept out of the shared repo.
+CLAUDE.md

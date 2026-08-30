@@ -2,8 +2,8 @@
 
 import boto3
 
-from deid.detect import detect_phi
-from deid.redact import redact
+from src.deid.detect import detect_phi
+from src.deid.redact import redact
 from tests.fixtures.mock_entities import MOCK_ENTITIES
 
 
