@@ -11,7 +11,6 @@ def load_note(path: str) -> str:
     """Read a clinical note (plaintext) from disk.
 
     """
-    text = ""
     with open(path, encoding="utf-8") as file:
         return file.read()
 
