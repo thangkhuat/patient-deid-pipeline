@@ -14,7 +14,7 @@ see CLAUDE.md, "Current state."
 from pathlib import Path
 
 _NOTE_PATH = Path(__file__).parent / "sample_note.txt"
-TEXT = _NOTE_PATH.read_text()
+TEXT = _NOTE_PATH.read_text(encoding="utf-8")
 
 
 def _entity(fragment: str, type_: str, score: float) -> dict:
