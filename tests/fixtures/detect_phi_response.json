@@ -1,0 +1,62 @@
+[
+  {
+    "Id": 1,
+    "BeginOffset": 8,
+    "EndOffset": 18,
+    "Score": 0.9997033476829529,
+    "Text": "John Smith",
+    "Category": "PROTECTED_HEALTH_INFORMATION",
+    "Type": "NAME",
+    "Traits": []
+  },
+  {
+    "Id": 2,
+    "BeginOffset": 24,
+    "EndOffset": 34,
+    "Score": 0.9999377727508545,
+    "Text": "14/03/1982",
+    "Category": "PROTECTED_HEALTH_INFORMATION",
+    "Type": "DATE",
+    "Traits": []
+  },
+  {
+    "Id": 3,
+    "BeginOffset": 49,
+    "EndOffset": 70,
+    "Score": 0.9954749941825867,
+    "Text": "St Vincent's Hospital",
+    "Category": "PROTECTED_HEALTH_INFORMATION",
+    "Type": "ADDRESS",
+    "Traits": []
+  },
+  {
+    "Id": 4,
+    "BeginOffset": 74,
+    "EndOffset": 84,
+    "Score": 0.9999966621398926,
+    "Text": "02/06/2026",
+    "Category": "PROTECTED_HEALTH_INFORMATION",
+    "Type": "DATE",
+    "Traits": []
+  },
+  {
+    "Id": 5,
+    "BeginOffset": 117,
+    "EndOffset": 125,
+    "Score": 0.38303342461586,
+    "Text": "0412 345",
+    "Category": "PROTECTED_HEALTH_INFORMATION",
+    "Type": "ID",
+    "Traits": []
+  },
+  {
+    "Id": 6,
+    "BeginOffset": 156,
+    "EndOffset": 166,
+    "Score": 0.9998072981834412,
+    "Text": "Sarah Chen",
+    "Category": "PROTECTED_HEALTH_INFORMATION",
+    "Type": "NAME",
+    "Traits": []
+  }
+]
