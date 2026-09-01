@@ -42,7 +42,7 @@ scaffolded, core `detect_phi()` / `redact()` logic not yet implemented.
 ```bash
 pip install -r requirements.txt
 aws configure  # if not already set up — needs Comprehend Medical access
-python -m deid.pipeline
+python -m src.deid.pipeline
 ```
 
 ## Data
