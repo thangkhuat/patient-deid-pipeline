@@ -15,13 +15,19 @@ def detect_phi(client, text: str) -> list[dict]:
 
     Returns:
         The raw list of entity dicts from the API response's "Entities"
-        key. Each entity has Text, Category, Type, Score, BeginOffset,
-        EndOffset (see AWS docs — deliberately not reshaped here yet;
-        confirm the real shape first, then decide if a cleaner internal
-        representation is worth introducing).
+        key, unreshaped on purpose. The real response (confirmed against
+        live AWS, see tests/fixtures/detect_phi_response.json) carries
+        Id, BeginOffset, EndOffset, Score, Text, Category, Type and
+        Traits — two more fields than originally anticipated, neither
+        currently used. Reshaping into an internal representation is
+        deferred until a second consumer of this list exists; see
+        docs/decision-log.md.
 
-    TODO: implement. First goal is just to see this print something real
-    for the sample note in tests/fixtures/ — don't build redact() until
-    this is confirmed working.
+    Raises:
+        Whatever botocore raises on failure — errors are deliberately not
+        caught here. A swallowed error would look like an empty entity
+        list, which redact() would treat as "no PHI in this note" and
+        pass the text through unredacted: a false all-clear.
     """
-    raise NotImplementedError
+    result = client.detect_phi(Text=text)
+    return result["Entities"]
