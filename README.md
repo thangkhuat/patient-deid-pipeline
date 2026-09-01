@@ -18,8 +18,11 @@ Full background: `docs/functional-requirements.md`.
 
 ## Status
 
-**Phase 2 (application) — in progress.** Requirements defined, repo
-scaffolded, core `detect_phi()` / `redact()` logic not yet implemented.
+**Phase 2 (application) — in progress.** `detect_phi()`, `redact()` and
+`load_note()` are implemented and running end-to-end against live AWS
+Comprehend Medical. Outstanding: the FR-4 confidence threshold is still
+provisional, and one known detection gap (AU phone formats) leaks — both
+tracked in [`docs/decision-log.md`](docs/decision-log.md).
 
 ## Phases
 
@@ -43,6 +46,13 @@ scaffolded, core `detect_phi()` / `redact()` logic not yet implemented.
 pip install -r requirements.txt
 aws configure  # if not already set up — needs Comprehend Medical access
 python -m src.deid.pipeline
+```
+
+Run from the repo root. Tests:
+
+```bash
+python -m pytest            # offline and free
+python -m pytest -m live    # opt-in; calls real AWS
 ```
 
 ## Data
