@@ -1,7 +1,7 @@
 """Entry point: load a note, detect PHI, redact it, print the result."""
 
 import boto3
-
+from pathlib import Path
 from src.deid.detect import detect_phi
 from src.deid.redact import redact
 from tests.fixtures.mock_entities import MOCK_ENTITIES
@@ -17,7 +17,8 @@ def load_note(path: str) -> str:
 
 def main() -> None:
     client = boto3.client("comprehendmedical", region_name="ap-southeast-2")
-    text = load_note("tests/fixtures/sample_note.txt")
+    note_path = Path(__file__).parent.parent.parent / "tests" / "fixtures" / "sample_note.txt"
+    text = load_note(note_path)
 
     # # Step 1 (do this first, alone): confirm detect_phi() works.
     # entities = detect_phi(client, text)
