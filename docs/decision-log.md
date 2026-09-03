@@ -2,6 +2,43 @@
 
 Newest first. Each entry: decision, rationale, alternatives considered.
 
+## Overlapping entities: replace with the regex entity's exact span, not union
+
+Tested empirically via scripts/check_phone_boundaries.py against six real
+Comprehend Medical calls. One case showed genuine boundary over-extension:
+parentheses directly against a phone number caused the API to include the
+opening bracket in its entity span -- "(0412 345 678" instead of the true
+"0412 345 678".
+
+Two options were weighed: taking the union of overlapping spans (safer
+against ever losing real content, at the cost of possibly over-redacting
+adjacent characters) versus pure replacement using only the regex's exact
+span. The one real example available showed the API's over-extension was
+harmless punctuation, not missed identifying content -- meaning pure
+replacement already produces the cleaner, correct output with no added
+complexity, since the discarded API entity's extra character was never
+going to matter for redaction correctness.
+
+Known limitation, explicitly not closed by this decision: this is one
+example. It confirms the *mechanism* of over-extension is real, but not
+that it's always limited to harmless punctuation. If a future case shows
+the API's extra reach capturing real content the regex doesn't independently
+cover, this decision needs revisiting with that evidence.
+
+## Phone detection backstop scoped to mobiles only; landlines explicitly out
+
+Comprehend Medical already detects Australian landlines correctly — confirmed
+against one example, (03) 9345 6789, full span, score 0.797. Building regex
+coverage for landlines anyway would create a new overlap between the regex
+entity and Comprehend Medical's own correct entity, on notes that currently
+redact fine — solving a problem with no demonstrated evidence behind it, at
+a real cost. Landline coverage stays out of scope until a real gap is shown.
+
+Tracked via test coverage instead of left as an assumption: landline
+detection is regression-tested across multiple area codes, so a future
+break in Comprehend Medical's landline handling surfaces as a failing test,
+not a silent assumption going stale.
+
 ## AWS access restored; detect.py implemented against the live API
 
 *2026-09-01.* The account was upgraded to a paid plan and Comprehend Medical
