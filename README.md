@@ -20,9 +20,12 @@ Full background: `docs/functional-requirements.md`.
 
 **Phase 2 (application) — in progress.** `detect_phi()`, `redact()` and
 `load_note()` are implemented and running end-to-end against live AWS
-Comprehend Medical. Outstanding: the FR-4 confidence threshold is still
-provisional, and one known detection gap (AU phone formats) leaks — both
-tracked in [`docs/decision-log.md`](docs/decision-log.md).
+Comprehend Medical, with detection now going through `get_all_entities()`,
+which merges Comprehend Medical with a regex backstop for Australian mobile
+numbers. Outstanding: the FR-4 confidence threshold is still provisional, and
+the backstop closes the AU mobile formats that were measured, not the
+US-centric detection bias underneath them — both tracked in
+[`docs/decision-log.md`](docs/decision-log.md).
 
 ## Phases
 
