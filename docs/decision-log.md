@@ -2,6 +2,35 @@
 
 Newest first. Each entry: decision, rationale, alternatives considered.
 
+## Detection goes through one entry point, `get_all_entities()`
+
+*2026-09-06.* `src/deid/resolve_entities.py` now owns the composition of
+Comprehend Medical and the regex backstop, and `pipeline.py` calls it instead of
+`detect_phi()`. This is what closes the AU mobile gap in practice: the two
+earlier entries below decided the backstop's *scope* and its *overlap rule*, but
+neither put it on the pipeline's path.
+
+The alternative was calling `detect_au_mobile()` and `resolve_overlaps()` inline
+in `pipeline.py`. Rejected because it makes the backstop opt-in per caller:
+anything that reaches for `detect_phi()` directly — a second entry point, a batch
+script, a future API handler — gets unbacked detection and no error to say so.
+The failure mode is a note that looks cleanly processed with a phone number still
+in it, which is the worst thing this tool can do quietly. One entry point makes
+using detection correctly the path of least resistance.
+
+`detect_phi()` stays public and thinly wrapped rather than being made private:
+its own tests inject a fake client at that seam, and the live fixture-drift test
+in `tests/test_detect.py` needs to call the API half alone.
+
+**Consequence for FR-4, worth noticing before the threshold research pass:** on
+`sample_note.txt` the backstop replaces the 0.383 phone entity with one scoring
+1.0, and every remaining entity scores 0.995 or above. That 0.383 span was the
+*only* sub-threshold data point on this note — so `min_score` is now inert at any
+value in (0, 0.995) on the real pipeline path. The threshold is not better
+evidenced than it was before this change; it is less exercised. Whatever corpus
+settles FR-4 needs notes whose low-confidence entities are something other than
+the AU mobile, since that one no longer reaches the threshold at all.
+
 ## Overlapping entities: replace with the regex entity's exact span, not union
 
 Tested empirically via scripts/check_phone_boundaries.py against six real
@@ -82,33 +111,41 @@ strength of the guessed 0.45. Against real scores that assertion is simply
 false. Anything else built on mock scores should be re-checked.
 
 ---
-## Sample note phone number is not reliably detected (open failure)
+## Sample note phone number is not reliably detected (closed 2026-09-06)
+
+*Superseded by the three backstop entries above; kept because it is the
+measurement they rest on.*
 
 Comprehend Medical does not recognise the Australian mobile format
 `0412 345 678`. It returns the partial span `0412 345`, typed `ID` rather than
 `PHONE_OR_FAX`, at score 0.383.
 
-This produces a Safe Harbor leak against the success criterion in
-`functional-requirements.md`, and it is **not fixed** — it is pinned by two
-`xfail(strict=True)` tests in `tests/test_redact.py` so it stays visible and
-turns green automatically when addressed:
+Against `detect_phi()` alone this produces a Safe Harbor leak, in two ways:
 
-- At the current `min_score=0.5` the entity is below threshold, so the full
-  number survives untouched.
+- At `min_score=0.5` the entity is below threshold, so the full number survives
+  untouched.
 - At `min_score=0.0` it is redacted, but only over the returned span, yielding
   `[ID] 678` — the trailing digits survive. **Lowering the threshold alone does
   not fix this.**
 
-That second point is the important one: it means the phone case needs span
-handling or a format-specific backstop, not just threshold tuning. Options not
-yet chosen: a regex pass for AU phone formats layered over Comprehend Medical;
-widening low-confidence spans to token boundaries; or accepting it and
-documenting it under FR-8. No decision made yet.
+That second point is what settled the fix: the phone case needed span handling
+or a format-specific backstop, not threshold tuning. Of the options weighed —
+a regex pass for AU formats, widening low-confidence spans to token boundaries,
+or accepting it under FR-8 — the regex backstop was chosen, and the pipeline now
+routes through it (see "Detection goes through one entry point").
+
+The two `xfail(strict=True)` tests in `tests/test_redact.py` are still there and
+still strict, but they no longer pin an open defect: they feed `RECORDED_ENTITIES`
+straight to `redact()`, which is the pre-backstop path, and so now characterise
+*Comprehend Medical's* behaviour rather than the tool's. They are what makes the
+backstop's justification falsifiable — if AWS ever fixes the truncation they fail
+loudly, and the decision above needs revisiting. The end-to-end claim that the
+number no longer survives is asserted in `tests/test_resolve_entities.py`.
 
 ---
 ## Why the phone number fails: US-centric format expectations
 
-*2026-09-01.* Root cause of the open failure recorded above. Comprehend Medical
+*2026-09-01.* Root cause of the failure recorded above. Comprehend Medical
 is an English-language service trained on US clinical text, and its phone
 detection keys off **US number shapes** rather than the concept of a phone
 number. Australian formats that don't resemble a US number are mis-typed,
@@ -200,6 +237,14 @@ defaulting. Deferred deliberately.
 
 Until it is settled, tests pass `min_score` explicitly rather than importing a
 project default, so no test quietly becomes the thing that decides this.
+
+*Updated 2026-09-06:* the phone backstop removed the 0.383 span from the
+pipeline's entity list, and with it the only observation on this note that the
+threshold acted on at all. The numbers above still describe what `DetectPHI`
+returns, but they no longer describe what reaches `redact()`. See the
+consequence note under "Detection goes through one entry point" — the research
+pass this entry defers now needs a corpus chosen for low-confidence entities
+that are *not* AU mobiles.
 
 ---
 ## Detection is tested against a fake client, not live AWS

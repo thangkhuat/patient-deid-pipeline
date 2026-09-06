@@ -29,8 +29,12 @@ def test_confidently_detected_identifiers_do_not_survive():
     """The core success criterion from functional-requirements.md.
 
     The phone number is deliberately absent from this list — Comprehend
-    Medical mis-detects it, and that known failure is pinned by
-    test_phone_number_still_leaks below rather than hidden here.
+    Medical mis-detects it, and that behaviour is pinned by
+    test_comprehend_medical_alone_leaves_the_phone_number_in_the_text
+    below rather than hidden here. It is absent because this test
+    exercises redact() against the raw API entities; the number *is*
+    redacted on the real pipeline path, which
+    tests/test_resolve_entities.py covers.
     """
     redacted_text, _ = redact(TEXT, RECORDED_ENTITIES, min_score=CURRENT_MIN_SCORE)
 
@@ -205,21 +209,35 @@ def test_audit_scores_match_the_detected_entities():
     )
 
 
-# --- Known limitations (FR-8) --------------------------------------------
+# --- Why the phone backstop exists (FR-8) --------------------------------
+#
+# These two pin Comprehend Medical's *own* behaviour on the Australian
+# mobile in the sample note — not a live defect in the tool. They feed
+# RECORDED_ENTITIES straight to redact(), which is the pre-backstop path;
+# the real pipeline goes through get_all_entities(), where the number is
+# fully redacted and tests/test_resolve_entities.py asserts exactly that.
+#
+# They are kept, and kept strict, because the backstop's justification
+# rests on this behaviour. If AWS ever fixes the truncation, these fail
+# loudly and the decision recorded in docs/decision-log.md needs
+# revisiting with that new evidence — which is the whole point of pinning
+# it rather than trusting a docs entry to stay true.
 
 
 @pytest.mark.xfail(
     strict=True,
     reason=(
-        "Known open failure, not yet fixed: Comprehend Medical returns the "
-        "Australian mobile 0412 345 678 as the partial span '0412 345' typed "
-        "ID at score 0.383. At the provisional min_score=0.5 it falls below "
-        "threshold and the full number survives. See docs/decision-log.md, "
-        "'Sample note phone number is not reliably detected'. This test "
-        "turns green when the leak is fixed."
+        "Upstream API behaviour, fixed at a higher layer: Comprehend "
+        "Medical returns the Australian mobile 0412 345 678 as the partial "
+        "span '0412 345' typed ID at score 0.383. At min_score=0.5 it falls "
+        "below threshold, so redact() on the raw API entities alone leaves "
+        "the full number in the text. See docs/decision-log.md, 'Sample "
+        "note phone number is not reliably detected'. This xfail is not a "
+        "TODO: it turns green only if AWS changes its detection, which is a "
+        "signal to re-examine the backstop, not a fix landing."
     ),
 )
-def test_phone_number_still_leaks():
+def test_comprehend_medical_alone_leaves_the_phone_number_in_the_text():
     redacted_text, _ = redact(TEXT, RECORDED_ENTITIES, min_score=CURRENT_MIN_SCORE)
 
     assert "0412 345 678" not in redacted_text
@@ -228,10 +246,12 @@ def test_phone_number_still_leaks():
 @pytest.mark.xfail(
     strict=True,
     reason=(
-        "Known open failure, not yet fixed: even with the threshold at 0 the "
-        "recorded span stops mid-number, so redaction yields '[ID] 678' and "
-        "the trailing digits survive. Lowering min_score alone does not fix "
-        "the phone case."
+        "Upstream API behaviour, fixed at a higher layer: even with the "
+        "threshold at 0 the recorded span stops mid-number, so redaction "
+        "yields '[ID] 678' and the trailing digits survive. This is the "
+        "measurement that ruled out lowering min_score as the fix and "
+        "motivated a regex backstop instead; it bears directly on the still "
+        "open FR-4 threshold decision."
     ),
 )
 def test_lowering_the_threshold_is_not_enough_for_the_phone():
