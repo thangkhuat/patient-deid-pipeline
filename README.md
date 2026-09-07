@@ -22,10 +22,13 @@ Full background: `docs/functional-requirements.md`.
 `load_note()` are implemented and running end-to-end against live AWS
 Comprehend Medical, with detection now going through `get_all_entities()`,
 which merges Comprehend Medical with a regex backstop for Australian mobile
-numbers. Outstanding: the FR-4 confidence threshold is still provisional, and
-the backstop closes the AU mobile formats that were measured, not the
-US-centric detection bias underneath them — both tracked in
-[`docs/decision-log.md`](docs/decision-log.md).
+numbers. The FR-4 confidence threshold is now settled at **0.001**, derived
+from a stated cost ratio and three rounds of corpus testing against the live
+API rather than guessed. Outstanding: the backstop closes the AU mobile
+formats that were measured, not the US-centric detection bias underneath them,
+and Comprehend Medical's `ADDRESS` false positives on phrases like
+"physiotherapy department" are accepted as noise rather than fixed — all
+tracked in [`docs/decision-log.md`](docs/decision-log.md).
 
 ## Phases
 

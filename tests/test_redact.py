@@ -7,10 +7,14 @@ DetectPHI response recorded from live AWS — so what they assert is what
 Comprehend Medical actually does to the sample note, not what a
 hand-built mock guessed it would do.
 
-Tests that exercise threshold behaviour pass min_score explicitly rather
-than relying on a project-wide default: FR-4's real threshold is still an
-open decision (docs/decision-log.md), and these tests should not quietly
-become the thing that settles it.
+Every test passes min_score explicitly rather than relying on a
+project-wide default. Originally that was so no test would quietly settle
+FR-4; now that FR-4 *is* settled at 0.001 (docs/decision-log.md, "FR-4
+resolved"), it matters for a different reason. This file feeds raw API
+entities to redact(), which is the pre-backstop path, and the phone
+truncation it characterises is only observable at thresholds above the
+span's 0.383. So a few tests deliberately state 0.5 or 0.0 inline instead
+of the project value — see the note on CURRENT_MIN_SCORE below.
 """
 
 import pytest
@@ -18,8 +22,17 @@ import pytest
 from src.deid.redact import redact
 from tests.fixtures.recorded_entities import RECORDED_ENTITIES, TEXT, entity
 
-# The threshold pipeline.py currently runs with. Provisional, not settled.
-CURRENT_MIN_SCORE = 0.5
+# The project threshold, settled under FR-4 on 2026-09-07 — see
+# docs/decision-log.md, "FR-4 resolved". Used by the tests whose subject
+# is something other than the threshold itself.
+#
+# The threshold tests below, and the first strict xfail, deliberately do
+# not use this: they characterise behaviour that is only observable above
+# the phone span's 0.383, so they state 0.5 or 0.0 inline. Don't
+# "consistency-fix" those back to this constant — at 0.001 the truncated
+# "0412 345" is redacted, the xfail XPASSes, and a deliberate
+# characterisation of AWS's behaviour turns into a spurious failure.
+CURRENT_MIN_SCORE = 0.001
 
 
 # --- FR-3 / FR-5: redacted text ------------------------------------------
@@ -130,8 +143,9 @@ def test_entities_below_min_score_are_left_in_the_text():
     """Current documented behaviour, asserted so a change to it is visible.
 
     This is the mechanism that causes the phone leak below. It is pinned
-    here as *what the code does*, not as what it should do — FR-4's
-    threshold decision is still open.
+    here as *what the code does*, at a threshold chosen to expose it —
+    0.5, not the project's settled 0.001. At the project threshold this
+    entity is redacted and the mechanism is invisible.
     """
     redacted_text, _ = redact(TEXT, RECORDED_ENTITIES, min_score=0.5)
 
@@ -229,8 +243,10 @@ def test_audit_scores_match_the_detected_entities():
     reason=(
         "Upstream API behaviour, fixed at a higher layer: Comprehend "
         "Medical returns the Australian mobile 0412 345 678 as the partial "
-        "span '0412 345' typed ID at score 0.383. At min_score=0.5 it falls "
-        "below threshold, so redact() on the raw API entities alone leaves "
+        "span '0412 345' typed ID at score 0.383. Asserted at a "
+        "characterisation threshold of 0.5 rather than the project's "
+        "0.001, since that is where the truncation is observable: below "
+        "threshold, redact() on the raw API entities alone leaves "
         "the full number in the text. See docs/decision-log.md, 'Sample "
         "note phone number is not reliably detected'. This xfail is not a "
         "TODO: it turns green only if AWS changes its detection, which is a "
@@ -238,7 +254,7 @@ def test_audit_scores_match_the_detected_entities():
     ),
 )
 def test_comprehend_medical_alone_leaves_the_phone_number_in_the_text():
-    redacted_text, _ = redact(TEXT, RECORDED_ENTITIES, min_score=CURRENT_MIN_SCORE)
+    redacted_text, _ = redact(TEXT, RECORDED_ENTITIES, min_score=0.5)
 
     assert "0412 345 678" not in redacted_text
 
@@ -250,8 +266,9 @@ def test_comprehend_medical_alone_leaves_the_phone_number_in_the_text():
         "threshold at 0 the recorded span stops mid-number, so redaction "
         "yields '[ID] 678' and the trailing digits survive. This is the "
         "measurement that ruled out lowering min_score as the fix and "
-        "motivated a regex backstop instead; it bears directly on the still "
-        "open FR-4 threshold decision."
+        "motivated a regex backstop instead — and it is why FR-4 could be "
+        "settled low (0.001) without that threshold having to carry the "
+        "phone case."
     ),
 )
 def test_lowering_the_threshold_is_not_enough_for_the_phone():
