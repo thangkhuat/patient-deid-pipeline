@@ -27,11 +27,11 @@ from src.deid.redact import redact
 from src.deid.resolve_entities import get_all_entities
 from tests.fixtures.recorded_entities import RECORDED_ENTITIES, TEXT, entity
 
-# The threshold pipeline.py currently runs with. Provisional, not settled
-# — see docs/decision-log.md. Nothing below should depend on its exact
-# value; the point of the backstop is that the phone entity now scores
-# 1.0 and clears any threshold at all.
-CURRENT_MIN_SCORE = 0.5
+# The project threshold, settled under FR-4 on 2026-09-07 — see
+# docs/decision-log.md, "FR-4 resolved". Nothing below should depend on
+# its exact value; the point of the backstop is that the phone entity
+# now scores 1.0 and clears any threshold at all.
+CURRENT_MIN_SCORE = 0.001
 
 PHONE = "0412 345 678"
 

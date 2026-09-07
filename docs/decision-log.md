@@ -2,6 +2,95 @@
 
 Newest first. Each entry: decision, rationale, alternatives considered.
 
+## FR-4 resolved: min_score = 0.001, derived from a stated cost ratio
+
+*2026-09-07.* Supersedes "min_score stays at 0.5 provisionally, pending a
+formal decision" below, which deferred this pending real evidence.
+Resolved via cost-sensitive threshold selection: t* = C_FP / (C_FP + C_FN).
+
+Cost ratio chosen: missed PHI treated as 1000x worse than an unnecessary
+redaction. Rationale, not a guess:
+- FR-4's own standing principle already implied a large ratio ("a missed
+  identifier is a compliance failure; an over-redacted normal word is just
+  noise"), never previously quantified.
+- Health Canada's clinical-information anonymization guidance (Draft
+  Guidance, 5.2.3) treats this exact identifier category -- names,
+  addresses, phone numbers -- as directly-identifying variables carrying
+  "100% risk of re-identification (risk=1.0)," with no probabilistic
+  threshold applied at all. A 1000x ratio is a bounded, usable
+  approximation of that same stance, not a literal import of any number
+  from that document -- their risk metric and this project's confidence
+  score measure different things (population re-identification risk vs.
+  per-entity detection confidence).
+- Three rounds of corpus testing against live Comprehend Medical output
+  support a low threshold without exposing a case where one was needed:
+  round 1 (11 sentences) found 0 false positives; round 2 (60 sentences)
+  found exactly 1 (an ADDRESS false positive on specialty+place-noun
+  phrases, see the dedicated decision-log entry); round 3 isolated that
+  pattern's mechanism precisely. No case across any round has ever scored
+  between 0.0001 and 0.28 -- the practical range separating candidate
+  ratios from 100x to 10000x is entirely untested territory, not a
+  meaningfully different real-world outcome today.
+
+Known limitation, stated plainly rather than glossed over: Comprehend
+Medical's confidence scores are not documented by AWS as calibrated
+probabilities. The cost-ratio formula assumes they are. The resulting
+threshold is a principled, defensible approximation under that assumption,
+not a mathematically guaranteed optimum.
+
+Practical value used in code: 0.001 (rounded from the exact 1/1001,
+consistent with the calibration caveat above -- more decimal precision
+would be false precision, not more accuracy).
+
+Reference:
+Health Canada, "Public Release of Clinical Information - Draft Guidance
+Document," Section 5.2.3 ("Measurement of data risk for directly-identifying
+variables"). https://www.canada.ca/en/health-canada/programs/consultation-public-release-clinical-information-drug-submissions-medical-device-applications/draft-guidance.html#a5-2-3
+Published 2018-04-10; explicitly a draft/consultation document, not binding
+regulation -- cited here for its reasoning on identifier categories, not as
+regulatory authority this project is required to follow.
+
+## ADDRESS false positives on "[specialty] + [place noun]" phrases — accepted, not fixed
+
+*2026-09-07.* Round 2 of FR-4's threshold corpus (60 no-PHI sentences) surfaced one false
+positive: "physiotherapy department" tagged ADDRESS at 0.7026. Round 3
+isolated the exact mechanism with a 25-sentence targeted probe rather than
+treating it as a one-off:
+
+- Specialty name alone ("Cardiology reviewed the case") — never flags.
+- "department" attached to a non-medical qualifier (finance, records, HR)
+  — never flags.
+- Specialty + a physical-space noun — department, unit, clinic, ward — flags
+  consistently (6/6 tested), at highly variable scores (0.37-0.998).
+- Specialty + "team" — does not flag. The one clean exception, and a
+  sensible one: "team" denotes people, not a place, unlike the others.
+- Bare generic facility terms with no specialty attached (reception, front
+  desk, nurses' station) — never flag. Confirms the pattern is specifically
+  the specialty+place combination, not generic institutional language.
+
+Conclusion: the model appears to key on "clinical specialty term adjacent to
+a place-shaped noun" and infer a location entity, even though department and
+ward names identify a hospital function, not a person or an address.
+
+Decision: documented as a known, characterized limitation. No targeted
+suppression fix built, unlike the AU mobile phone backstop. The two cases
+differ in kind, not just severity: the phone gap was a genuine leak of real
+PHI that a threshold couldn't fix. This is over-redaction of content that
+was never identifying in the first place -- squarely the "noise" category
+already on record ("an over-redacted normal word is just noise; a missed
+identifier is a compliance failure"). Building a suppression mechanism here
+would add real complexity to reduce a cost the project has already decided
+is acceptable.
+
+Related, separate finding, not folded into this decision: "interstate" alone
+flagged ADDRESS at 0.2791 in the same round. Different mechanism -- genuine
+coarse geography, not a fabricated non-address -- and not investigated
+further here.
+
+Accepted cost: department, unit, ward, and clinic names will sometimes be
+redacted unnecessarily in output. Does not affect detection or redaction of
+genuine PHI.
+
 ## Detection goes through one entry point, `get_all_entities()`
 
 *2026-09-06.* `src/deid/resolve_entities.py` now owns the composition of
@@ -30,6 +119,12 @@ value in (0, 0.995) on the real pipeline path. The threshold is not better
 evidenced than it was before this change; it is less exercised. Whatever corpus
 settles FR-4 needs notes whose low-confidence entities are something other than
 the AU mobile, since that one no longer reaches the threshold at all.
+
+*Followed up 2026-09-07:* that corpus was built (`scripts/threshold_corpus.py`,
+`scripts/threshold_corpus_expanded.py`, `scripts/address_false_positive_probe.py`)
+and FR-4 is now settled — see the entry at the top of this log. The observation
+above still holds: `min_score = 0.001` remains inert on `sample_note.txt`, and
+the decision rests on the corpus rather than on this note.
 
 ## Overlapping entities: replace with the regex entity's exact span, not union
 
@@ -214,7 +309,12 @@ Pinned by `xfail(strict=True)` tests in `tests/test_redact.py` so the failure
 stays visible and turns green when addressed.
 
 ---
-## min_score stays at 0.5 provisionally, pending a formal decision
+## min_score stays at 0.5 provisionally, pending a formal decision (superseded 2026-09-07)
+
+**Superseded by "FR-4 resolved: min_score = 0.001, derived from a stated cost
+ratio" at the top of this log.** Kept for the reasoning it records — in
+particular the argument for 0.0, which the resolving entry builds on rather
+than discards. The value below is no longer what the pipeline runs with.
 
 Real confidence scores are now observable, which was the precondition the
 earlier correction in `technical-requirements.md` set for choosing FR-4's

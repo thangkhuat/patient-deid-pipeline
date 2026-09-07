@@ -69,12 +69,34 @@ in (0, 0.995). The parameter is therefore *less* exercised by this note than the
 figures above suggest — a fact the FR-4 research pass has to design around, not
 around the numbers alone.
 
-`pipeline.py` currently passes **0.5**. This is provisional and explicitly not
-the FR-4 decision: one note is too little evidence to fix a recall-critical
-parameter. The full reasoning, including the argument for 0.0, is in
-`decision-log.md` under "min_score stays at 0.5 provisionally". Until it is
-settled, tests pass `min_score` explicitly rather than importing a shared
-default, so no test becomes the thing that decides it by accident.
+**Settled 2026-09-07: `min_score` is 0.001.** Chosen by cost-sensitive threshold
+selection, `t* = C_FP / (C_FP + C_FN)`, with missed PHI stated as 1000x worse
+than an unnecessary redaction — so `t* = 1/1001`, rounded to 0.001. The 1000x
+ratio quantifies FR-4's existing principle rather than inventing a new one, and
+is backed by a three-round corpus run against live Comprehend Medical
+(`scripts/threshold_corpus.py`, `scripts/threshold_corpus_expanded.py`,
+`scripts/address_false_positive_probe.py`). Full reasoning — including the
+argument for 0.0 that this lands next to, and the caveat that AWS does not
+document these scores as calibrated probabilities — is in `decision-log.md`
+under "FR-4 resolved: min_score = 0.001, derived from a stated cost ratio".
+
+Tests still pass `min_score` explicitly rather than importing a shared default.
+That was originally so no test would settle FR-4 by accident; it stays because
+several tests in `tests/test_redact.py` characterise threshold behaviour at
+specific values (0.0, 0.5) that are deliberately *not* the project value.
+
+## Known false-positive pattern: "[specialty] + [place noun]"
+
+Measured, characterised, and accepted — not fixed. Comprehend Medical tags
+phrases like "physiotherapy department", "cardiology ward" and "oncology unit"
+as `ADDRESS`, at widely varying scores (0.37–0.998). Specialty alone does not
+flag; "department" with a non-medical qualifier does not flag; specialty +
+"team" does not flag. At `min_score = 0.001` these are redacted.
+
+This is over-redaction of text that was never identifying, which FR-4 already
+classes as acceptable noise, so no suppression mechanism was built — unlike the
+phone gap below, which was a real leak of PHI. See `decision-log.md`, "ADDRESS
+false positives on '[specialty] + [place noun]' phrases".
 
 ## Known detection gap: non-US phone formats
 

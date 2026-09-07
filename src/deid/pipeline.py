@@ -28,9 +28,9 @@ def main() -> None:
     print(entities)
     print("----------------------------------------")
 
-    # Redaction. 0.5 is provisional, not the FR-4 decision — see
-    # docs/decision-log.md, "min_score stays at 0.5 provisionally".
-    redacted_text, audit = redact(text, entities, min_score=0.5)
+    # Redaction at the FR-4 threshold, settled 2026-09-07 — see
+    # docs/decision-log.md, "FR-4 resolved: min_score = 0.001".
+    redacted_text, audit = redact(text, entities, min_score=0.001)
     print(redacted_text)
 
 

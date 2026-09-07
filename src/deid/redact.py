@@ -16,9 +16,12 @@ def redact(
         text: the original clinical text.
         entities: raw entity list from detect_phi().
         min_score: confidence threshold below which an entity is not
-            redacted. Pick this deliberately after seeing real scores
-            come back from Comprehend Medical — see the correction note
-            in docs/technical-requirements.md before hardcoding a value.
+            redacted (inclusive at the boundary — a score equal to
+            min_score is redacted). The project value is 0.001, settled
+            under FR-4 from a stated cost ratio; see
+            docs/technical-requirements.md, "Confidence threshold".
+            Passed in rather than defaulted so callers and tests are
+            explicit about which threshold they mean.
 
     Returns:
         A tuple of (redacted_text, audit_records). audit_records is a list
