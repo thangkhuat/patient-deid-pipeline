@@ -15,7 +15,8 @@ def load_note(path: str) -> str:
 
 
 def main() -> None:
-    client = boto3.client("comprehendmedical", region_name="ap-southeast-2")
+    session = boto3.Session(profile_name="patient-deid")
+    client = session.client("comprehendmedical", region_name="ap-southeast-2")
     note_path = Path(__file__).parent.parent.parent / "tests" / "fixtures" / "sample_note.txt"
     text = load_note(note_path)
     print(text)
@@ -25,8 +26,6 @@ def main() -> None:
     # Always via get_all_entities() rather than detect_phi() directly, so
     # this path cannot silently lose the backstop.
     entities = get_all_entities(client, text)
-    print(entities)
-    print("----------------------------------------")
 
     # Redaction at the FR-4 threshold, settled 2026-09-07 — see
     # docs/decision-log.md, "FR-4 resolved: min_score = 0.001".
