@@ -2,6 +2,332 @@
 
 Newest first. Each entry: decision, rationale, alternatives considered.
 
+## ADDRESS false positives on "[specialty] + [place noun]" phrases — accepted, not fixed
+
+*2026-09-07, expanded 2026-09-17.* Round 2 of FR-4's threshold corpus (60 no-PHI sentences) surfaced one false
+positive: "physiotherapy department" tagged ADDRESS at 0.7026. Round 3
+isolated the exact mechanism with a 25-sentence targeted probe rather than
+treating it as a one-off, and recorded here in full -- the earlier
+compressed summary ("0.37-0.998") lost the individual values and produced
+an incorrect downstream claim about gaps in the data; see the correction
+in the review_threshold entry below.
+
+Specialty + "department" (6/6 flagged):
+
+| Phrase | Score |
+|---|---|
+| occupational therapy department | 0.3743 |
+| radiology department | 0.6736 |
+| physiotherapy department | 0.7026 |
+| oncology department | 0.8453 |
+| cardiology department | 0.9316 |
+| emergency department | 0.9979 |
+
+Specialty + other physical-space nouns (5/6 flagged -- "team" is the
+control):
+
+| Phrase | Score |
+|---|---|
+| physiotherapy unit | 0.4174 |
+| cardiology ward | 0.7281 |
+| physiotherapy clinic | 0.9520 |
+| outpatient clinic | 0.9685 |
+| intensive care unit | 0.9902 |
+| palliative care team | not flagged (control -- "team" denotes people, not place) |
+
+- Specialty name alone ("Cardiology reviewed the case") — never flags.
+- "department" attached to a non-medical qualifier (finance, records, HR)
+  — never flags.
+- Bare generic facility terms with no specialty attached (reception, front
+  desk, nurses' station) — never flag. Confirms the pattern is specifically
+  the specialty+place combination, not generic institutional language.
+
+Conclusion: the model appears to key on "clinical specialty term adjacent to
+a place-shaped noun" and infer a location entity, even though department and
+ward names identify a hospital function, not a person or an address.
+
+Decision: documented as a known, characterized limitation. No targeted
+suppression fix built, unlike the AU mobile phone backstop. The two cases
+differ in kind, not just severity: the phone gap was a genuine leak of real
+PHI that a threshold couldn't fix. This is over-redaction of content that
+was never identifying in the first place -- squarely the "noise" category
+already on record. Building a suppression mechanism here would add real
+complexity to reduce a cost the project has already decided is acceptable.
+
+Related, separate finding, not folded into this decision: "interstate" alone
+flagged ADDRESS at 0.2791 in the same round. Different mechanism -- genuine
+coarse geography, not a fabricated non-address -- and not investigated
+further here.
+
+Accepted cost: department, unit, ward, and clinic names will sometimes be
+redacted unnecessarily in output. Does not affect detection or redaction of
+genuine PHI.
+
+## FR-7 narrowed to the trust boundary; FR-10 added for internal review
+
+*2026-09-17.* Narrows FR-7, which until now read "System shall NOT retain any
+mapping capable of re-identifying a redacted entity," and the success criterion
+"No persistent re-identification capability exists anywhere in the system."
+
+Forced by the review_queue (see the entry below): it retains the encrypted text
+of flagged entities in a file that also carries the redacted output. That is
+re-identification capability held inside the system, and under FR-7 as written
+there was no reading where it passed. The requirement was not wrong — it was
+written for a system that produced one artifact for one audience, and a second
+artifact with a different audience now exists.
+
+Why narrow rather than drop the review queue:
+- FR-7's founding entry ("Redaction is irreversible", below) scopes its own
+  concern to the audience: third-party vendors, researchers and ML pipelines
+  "should never be able to re-identify a patient." It names the
+  same-organization re-link case explicitly and sets it aside as "a real,
+  different scenario" — declining to build it, not forbidding it.
+- functional-requirements.md's Purpose already states the threat model in
+  boundary terms: "most PHI exposure happens downstream of the originating
+  hospital, not inside it." The narrowed FR-7 makes explicit what Purpose
+  already assumed.
+- The Reviewer holds source-note access by definition, so the review artifact
+  exposes no content they cannot already read. Hence the new Reviewer actor,
+  alongside Operator and Downstream consumer.
+
+What this costs, stated plainly rather than glossed: FR-7 used to be absolute
+and checkable by inspection — no mapping, anywhere, full stop. It is now
+conditional on where an artifact goes. That property depends on operational
+discipline (not releasing the review file) rather than on the tool's structure,
+and it is a weaker guarantee than the one it replaces. Known limitation,
+accepted knowingly: FR-7 can no longer be verified by inspecting the codebase
+alone, and belongs in the FR-8 limitations write-up when that is written.
+
+Alternatives considered:
+- **Offsets instead of ciphertext.** review_queue carries {type, score,
+  BeginOffset, EndOffset} and no content; the Reviewer opens the source note
+  at that span. FR-7 and both success criteria survive verbatim, and Fernet,
+  the key environment variable and the entire KMS migration disappear with
+  it. This is the option that fits the original FR-7 best, and it was turned
+  down on its merits rather than because it fails: an offset is only useful
+  while the source note is still available and unedited, so review becomes
+  dependent on a document this tool does not control and cannot verify. A
+  stored offset into a note that has since been revised points confidently at
+  the wrong span, which is worse than not being able to review at all.
+
+  Noted at documentation time rather than part of the original decision: the
+  ciphertext route also happens to keep the encryption and key-handling design
+  that the Phase 3 KMS work builds on. A secondary observation, not the reason
+  — the decision would have gone the same way without it.
+- **Split the artifacts.** Emit the redacted output and the review queue as two
+  files so ciphertext and redacted text are never colocated, leaving neither
+  file a mapping on its own. Not adopted now, but it remains available and
+  would strengthen the narrowed FR-7 structurally rather than procedurally —
+  the natural thing to revisit when write_report() meets real infrastructure.
+
+## Audit records split into two independent tiers, not one
+
+*2026-09-17.*
+
+Prompted by asking a question the format decision was quietly skipping over:
+who actually reviews this file — the tool operator, or someone on the
+originating side (a treating clinician, an internal compliance reviewer)
+who already has legitimate access to the source note? Those two reviewers
+need genuinely different things, which meant "what should the audit log
+contain" was never answerable as a single question.
+
+**Tier 1 — audit_records, from redact() directly, unmodified.** type/score/
+action only, exactly as redact() has always produced it. Zero PHI, safe for
+anyone, including the tool operator, to see.
+
+**Tier 2 — review_queue, built independently from the raw, pre-redaction
+entity list, gated at review_threshold = 0.8.** For a reviewer who already
+has legitimate access to the source document, seeing the actual flagged
+text exposes nothing new — "minimum necessary," applied here to the audit
+trail rather than the redacted output itself. Content is Fernet-encrypted
+before being written — see the report encryption/storage entry for that
+design.
+
+0.8 is taken from Liu Chen Kiow J, Massaro C, Jimenez EC, et al. (2026), "A
+novel inflammatory bowel disease registry powered by artificial intelligence
+and natural language processing," PLOS Digital Health 5(8): e0001603.
+https://doi.org/10.1371/journal.pdig.0001603 — their confidence banding for
+Comprehend Medical, arrived at following consultation with AWS, uses 0.8 as
+its "high confidence" boundary. The division of labour, stated precisely
+rather than as "borrowed from a paper": local evidence establishes the
+*range*, and the paper fixes the *point* within it.
+
+Citation checked against the primary source rather than taken on trust: the
+DOI matches the article's own metadata, and both the banding and the
+"following consultation with AWS" wording are from the paper's own
+"Validation process" section, not paraphrase strengthened in the retelling.
+Worth recording because this citation is load-bearing in a way FR-4's are
+not — Health Canada informs min_score's reasoning but does not supply its
+value, whereas 0.8 is the paper's number used directly.
+
+**Only half the banding was adopted.** The paper bands at two thresholds,
+0.8 and 0.6; this project takes the 0.8 boundary and stops there, collapsing
+everything below it into one undifferentiated review queue. So an entity at
+0.75 and an entity at 0.20 are treated identically here, where the source
+distinguishes them. That narrowing is deliberate for now and rests on there
+being no reviewer workload to triage — empty on the sample note, and at most
+six entities across the entire corpus (see below) — not on a judgement that
+the lower boundary is wrong.
+The moment the queue holds enough to need prioritising, 0.6 is the first
+thing to reach for, and it arrives with the same provenance as 0.8 rather
+than needing a fresh argument.
+
+**What the corpus does establish — the range.** The lowest-scoring real PHI
+observed across all rounds is 0.9032 — the ADDRESS span "45 Collins Street,
+Melbourne", from round 1's clean-baseline category
+(`scripts/threshold_corpus.py`, CLEAN_BASELINE). Cited directly, the same
+treatment the false positives above now get, because the whole "range is
+locally derived" claim rests on it. Any threshold below that flags no
+genuine detection unnecessarily, so the safe range's upper bound is locally
+measured rather than borrowed, and 0.8 sits comfortably inside it rather than
+near its edge.
+
+**What the corpus cannot fully establish — the point.** False positives and
+real PHI overlap in score, and not marginally: five measured false
+positives score between 0.9316 and 0.9979, every one of them above the
+0.9032 floor for real PHI. No threshold can therefore catch all known
+false positives without also flagging real PHI -- a property of the data,
+not a gap in measurement. Below that overlap zone, the picture is more
+resolved than first written here: the full round-3 data (see the ADDRESS
+entry above) shows measured false positives at 0.3743, 0.4174 and 0.6736
+between 0.2791 and 0.7026, and at 0.7281 and 0.8453 between 0.7026 and
+0.9032 -- so 0.75 and 0.80 are equivalent on local evidence (both catch
+the same six known false positives), but 0.85 is measurably different,
+catching a seventh (oncology department, 0.8453) that the lower two miss.
+0.8 is not, therefore, an arbitrary point inside an undifferentiated
+range -- it sits at the upper edge of where local evidence still agrees
+with 0.75, one measured step before the data would start pulling toward
+a higher value.
+
+0.383, the truncated phone span, is excluded from that list deliberately: it
+is real PHI mis-detected, not a false positive, and resolve_overlaps() drops
+it before it ever reaches review_threshold on the real pipeline path. Mixing
+it in would blur the two populations this paragraph exists to separate.
+
+That overlap is the real reason a clean local derivation was never available,
+and it is worth stating outright rather than leaving as an absence. The paper
+is not supplying a number the project had no way to narrow toward -- local
+evidence does distinguish 0.85 from the {0.75, 0.80} pair. It does not,
+however, distinguish 0.75 from 0.80 from each other: both catch an identical
+set of six known false positives, so the paper is choosing between two values
+the local data treats as equivalent, not picking a point inside an entirely
+unconstrained range.
+
+Still weaker footing than FR-4's threshold, though less so than "borrowed
+from one paper" implies, and worth keeping the difference visible: min_score
+is a value computed from a stated cost ratio, whereas review_threshold is a
+locally bounded range with an externally chosen point inside it. The paper's
+banding was built for a different corpus and a different purpose (registry
+extraction, not de-identification), which is a real caveat on the point even
+though it does not touch the range. The 0.28-0.90 band already holds six measured
+entities, which is enough to distinguish 0.85 from the {0.75, 0.80} pair (see
+above) but not enough to separate 0.75 from 0.80 specifically -- both catch an
+identical set. Further volume in this band, particularly between 0.7281 and
+0.8453 where nothing is currently measured, is what would let local evidence
+narrow the point itself rather than just the range. The same evidence would
+either justify the paper's second band at 0.6 or show that a borrowed banding
+does not transfer to this corpus at all.
+
+Tier 2 records carry the action redact() took, alongside type and score.
+Without it the queue conflates two materially different situations: an entity
+scoring below min_score is left in the output text, while one between
+min_score and review_threshold was redacted. The first is a possible leak,
+the second at worst over-redaction, and a reviewer triaging the queue needs
+to tell them apart before decrypting anything. build_report() therefore takes
+min_score as well as review_threshold and records the same verdict redact()
+reached for each entity.
+
+Recorded rather than joining the two tiers after the fact, because there is
+no join key to join on: audit_records carry no entity id, and phone_backstop
+entities are emitted with Id: None, so ids are not unique across the two
+detectors — a note containing two AU mobiles would produce two entities
+sharing an id of None. Giving the tiers a real shared key means assigning ids
+in the backstop and adding one to FR-6's record shape, which is a larger
+change than the question warrants and would reopen redact() immediately after
+it was deliberately reverted. Available later if the tiers ever need more
+than this one field in common.
+
+**First design, tried and abandoned:** tier 2 content attached directly to
+redact()'s flagged_low_confidence records, requiring a change to redact()
+to carry each entity's Text field through. Reverted, on separation of
+concerns rather than on frequency: the actual need — "should a human look
+at this" — is a different question from redact()'s "should this be
+redacted," and hanging the first off the second's records couples them for
+no reason. Since review_threshold (0.8) sits above min_score (0.001),
+everything the redact() change could have caught is already a strict
+subset of what review_threshold catches independently, so the coupling
+bought nothing either. redact() was reverted to its original, untouched
+three-field record.
+
+Not offered as a reason, though it was the first one reached for: that
+flagged_low_confidence "almost never fires" at min_score = 0.001. True,
+but it does not separate the two designs — review_threshold at 0.8 fires
+just as rarely on the real pipeline path. On the sample note, post-backstop
+scores are 0.9955-1.0 across all six entities and the review queue comes
+back empty; the 0.383 phone span that would have been caught is dropped by
+resolve_overlaps() in favour of the backstop's 1.0 entity. Across every
+round of corpus testing, the only entities 0.8 would ever have flagged are
+the six ADDRESS/interstate false positives documented above (0.2791 to
+0.7281) -- all false positives, none a missed identifier. Both designs are near-inert on today's evidence; the argument for
+this one is that it is the right shape, not that it does more work.
+
+## Report encryption and storage location — interim design, KMS is the real target
+
+*2026-09-17.*
+
+Fernet (symmetric encryption) chosen for review_queue content, explicitly
+as an interim measure. The real target is AWS KMS envelope encryption once
+Phase 3 infrastructure exists — a master key that never leaves KMS, a
+single-use data key generated per encryption operation, and IAM-enforced,
+CloudTrail-logged access control between reviewer roles. Fernet cannot
+replicate the two things that actually matter for this use case: granting
+decrypt access to one identity but not another without handing over the
+same raw key to both, and an automatic, queryable record of who decrypted
+what. Built with the same key-separation shape as KMS — ciphertext and key never
+colocated — so the call sites and the trust model carry over.
+
+What does not carry over, recorded now rather than discovered later: under
+envelope encryption each record must store its own wrapped data key
+alongside its ciphertext, and a review_queue record is currently {type,
+score, content_encrypted} with nowhere to put one. Migrating therefore
+changes the record schema, not just where the key comes from. The narrower
+alternative — calling KMS Encrypt directly on each value, which stays under
+the 4KB limit for entity text and needs no schema change — trades that
+schema churn for a network call per entity and a hard runtime dependency on
+KMS availability. Decide between them when Phase 3 lands; both are reachable
+from here, which is the property this design was actually buying.
+
+Key handling: generated once and stored as a persistent environment
+variable, PATIENT_DEID_ENCRYPTION_KEY. There is deliberately no key-
+generation code in the package — generating a key is a one-time setup act,
+not something the pipeline should be able to do at runtime:
+
+    py -3.10 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    setx PATIENT_DEID_ENCRYPTION_KEY <the printed key>
+
+`setx` writes to the user environment and takes effect in new shells only;
+the current shell keeps the old value.
+load_encryption_key() must never generate a key itself if the variable is
+missing — doing so would silently orphan every previously-encrypted record
+with no way to recover them. Fails loudly instead.
+
+Output location: %LOCALAPPDATA%\patient-deid-pipeline\output\, resolved via
+the LOCALAPPDATA environment variable rather than a hardcoded path.
+Deliberately outside OneDrive's Known Folder Move sync scope, confirmed to
+cover only Desktop, Documents, and Pictures on this machine. Known,
+accepted gap: the repository itself still sits inside OneDrive-synced
+Desktop — acceptable for source code and synthetic test data, but not
+something to replicate for anything carrying real content.
+
+Note on what encryption at rest does and doesn't guarantee, kept honest
+rather than overclaimed: the plaintext key necessarily exists briefly in
+process memory at the moment of use, whether Fernet or KMS. Encryption
+reduces blast radius (one key, one record, vs. a lifetime of encrypted
+content sharing one exposure) and — once on real infrastructure — narrows
+where that exposure can occur (a single-purpose Lambda execution
+environment vs. a general-purpose laptop), rather than eliminating the
+exposure window entirely.
+
 ## FR-4 resolved: min_score = 0.001, derived from a stated cost ratio
 
 *2026-09-07.* Supersedes "min_score stays at 0.5 provisionally, pending a
@@ -49,47 +375,6 @@ variables"). https://www.canada.ca/en/health-canada/programs/consultation-public
 Published 2018-04-10; explicitly a draft/consultation document, not binding
 regulation -- cited here for its reasoning on identifier categories, not as
 regulatory authority this project is required to follow.
-
-## ADDRESS false positives on "[specialty] + [place noun]" phrases — accepted, not fixed
-
-*2026-09-07.* Round 2 of FR-4's threshold corpus (60 no-PHI sentences) surfaced one false
-positive: "physiotherapy department" tagged ADDRESS at 0.7026. Round 3
-isolated the exact mechanism with a 25-sentence targeted probe rather than
-treating it as a one-off:
-
-- Specialty name alone ("Cardiology reviewed the case") — never flags.
-- "department" attached to a non-medical qualifier (finance, records, HR)
-  — never flags.
-- Specialty + a physical-space noun — department, unit, clinic, ward — flags
-  consistently (6/6 tested), at highly variable scores (0.37-0.998).
-- Specialty + "team" — does not flag. The one clean exception, and a
-  sensible one: "team" denotes people, not a place, unlike the others.
-- Bare generic facility terms with no specialty attached (reception, front
-  desk, nurses' station) — never flag. Confirms the pattern is specifically
-  the specialty+place combination, not generic institutional language.
-
-Conclusion: the model appears to key on "clinical specialty term adjacent to
-a place-shaped noun" and infer a location entity, even though department and
-ward names identify a hospital function, not a person or an address.
-
-Decision: documented as a known, characterized limitation. No targeted
-suppression fix built, unlike the AU mobile phone backstop. The two cases
-differ in kind, not just severity: the phone gap was a genuine leak of real
-PHI that a threshold couldn't fix. This is over-redaction of content that
-was never identifying in the first place -- squarely the "noise" category
-already on record ("an over-redacted normal word is just noise; a missed
-identifier is a compliance failure"). Building a suppression mechanism here
-would add real complexity to reduce a cost the project has already decided
-is acceptable.
-
-Related, separate finding, not folded into this decision: "interstate" alone
-flagged ADDRESS at 0.2791 in the same round. Different mechanism -- genuine
-coarse geography, not a fabricated non-address -- and not investigated
-further here.
-
-Accepted cost: department, unit, ward, and clinic names will sometimes be
-redacted unnecessarily in output. Does not affect detection or redaction of
-genuine PHI.
 
 ## Detection goes through one entry point, `get_all_entities()`
 
@@ -421,6 +706,10 @@ makes debugging ambiguous — a failure could be the logic or the
 infrastructure. Solve one, then wrap the other around it.
 
 ## Redaction is irreversible (anonymization, not pseudonymization)
+
+*Scope clarified 2026-09-17 — see "FR-7 narrowed to the trust boundary" at
+the top. The principle below is unchanged for anything released downstream;
+what changed is that an internal review artifact is no longer covered by it.*
 
 The tool's audience — third-party vendors, researchers, AI/ML training
 pipelines — should never be able to re-identify a patient; that's the whole
