@@ -9,7 +9,8 @@ silently generated, and output written outside OneDrive's sync scope.
 import json
 
 import pytest
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken
+from src.deid.report import decrypt_flagged_content
 
 from src.deid.report import (
     get_output_directory,
@@ -64,6 +65,26 @@ def test_encrypt_flagged_content_does_not_return_plaintext():
     key = Fernet.generate_key()
     ciphertext = encrypt_flagged_content("Zbigniew Wojcik", key)
     assert "Zbigniew Wojcik" not in ciphertext
+
+
+# --- decrypt_flagged_content -------------------------------------------
+
+def test_decrypt_flagged_content_round_trips():
+    key = Fernet.generate_key()
+    plaintext = "Zbigniew Wojcik"
+    ciphertext = encrypt_flagged_content(plaintext, key)
+    assert decrypt_flagged_content(ciphertext, key) == plaintext
+
+
+def test_decrypt_flagged_content_fails_loudly_on_wrong_key():
+    key = Fernet.generate_key()
+    wrong_key = Fernet.generate_key()
+    ciphertext = encrypt_flagged_content("occupational therapy department", key)
+    with pytest.raises(InvalidToken):
+        decrypt_flagged_content(ciphertext, wrong_key)
+
+
+# --- get_output_directory --------------------------------------------------
 
 
 # --- identify_entities_for_review ---------------------------------------

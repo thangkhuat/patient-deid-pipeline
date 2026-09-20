@@ -34,7 +34,6 @@ def get_output_directory() -> Path:
     Returns:
         The resolved, existing directory path.
 
-    TODO: implement.
     """
     output_dir = Path(os.getenv("LOCALAPPDATA")) / "patient-deid-pipeline" / "output"
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -52,7 +51,7 @@ def load_encryption_key() -> bytes:
     Returns:
         The key as bytes, ready to pass to Fernet(key).
 
-    TODO: implement. Decide explicitly what happens when the env var is
+    Decide explicitly what happens when the env var is
     missing -- which exception, and what message tells the operator
     exactly what to do (run the setx command from decision-log.md).
     """
@@ -74,7 +73,7 @@ def encrypt_flagged_content(text: str, key: bytes) -> str:
         Ciphertext as a string, ready to drop directly into a JSON
         audit record's "content_encrypted" field.
 
-    TODO: implement. Fernet's encrypt() returns bytes -- decide how
+    Fernet's encrypt() returns bytes -- decide how
     that becomes a JSON-safe string (Fernet's own output is already
     base64, so check whether an extra encode/decode step is actually
     needed or whether it's redundant).
@@ -82,6 +81,28 @@ def encrypt_flagged_content(text: str, key: bytes) -> str:
     fernet = Fernet(key)
     encrypted_bytes = fernet.encrypt(text.encode())
     return encrypted_bytes.decode()
+
+def decrypt_flagged_content(ciphertext: str, key: bytes) -> str:
+    """Decrypt one review_queue entry's content back to plaintext.
+
+    Mirror of encrypt_flagged_content() -- same key-as-parameter
+    reasoning: callable without touching the environment, and "where
+    the key comes from" stays someone else's job.
+
+    Args:
+        ciphertext: a review_queue record's "content_encrypted" value.
+        key: the same Fernet key used to encrypt it.
+
+    Returns:
+        The original plaintext.
+
+    Raises:
+        cryptography.fernet.InvalidToken: wrong key, or the ciphertext
+        has been tampered with or corrupted.
+    """
+    fernet = Fernet(key)
+    decrypted_bytes = fernet.decrypt(ciphertext.encode())
+    return decrypted_bytes.decode()
 
 
 def identify_entities_for_review(entities: list[dict], review_threshold: float) -> list[dict]:
@@ -107,7 +128,6 @@ def identify_entities_for_review(entities: list[dict], review_threshold: float) 
         still carrying its original Type, Score, and Text fields
         unchanged.
 
-    TODO: implement.
     """
     return [entity for entity in entities if entity["Score"] < review_threshold]
 
@@ -152,7 +172,6 @@ def build_report(redacted_text: str, audit_records: list[dict], entities: list[d
     Returns:
         {"redacted_text": ..., "audit_records": [...], "review_queue": [...]}
 
-    TODO: implement.
     """
     review_queue = []
     for entity in identify_entities_for_review(entities, review_threshold):
@@ -187,7 +206,6 @@ def write_report(report: dict, output_dir: Path) -> Path:
     Returns:
         The full path of the file actually written.
 
-    TODO: implement.
     """
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"report_{timestamp}.json"

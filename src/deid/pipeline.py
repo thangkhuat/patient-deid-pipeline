@@ -2,9 +2,13 @@
 
 import boto3
 from pathlib import Path
+from src.deid.report import get_output_directory, load_encryption_key, build_report, write_report
 from src.deid.redact import redact
 from src.deid.resolve_entities import get_all_entities
 
+
+MIN_SCORE = 0.001
+REVIEW_THRESHOLD = 0.8
 
 def load_note(path: str) -> str:
     """Read a clinical note (plaintext) from disk.
@@ -14,24 +18,22 @@ def load_note(path: str) -> str:
         return file.read()
 
 
-def main() -> None:
+def main():
     session = boto3.Session(profile_name="patient-deid")
     client = session.client("comprehendmedical", region_name="ap-southeast-2")
-    note_path = Path(__file__).parent.parent.parent / "tests" / "fixtures" / "sample_note.txt"
+    note_path = Path(__file__).parent.parent.parent / "tests" / "fixtures" / "review_queue_demo_note.txt"
+
     text = load_note(note_path)
-    print(text)
-    print("----------------------------------------")
-
-    # Detection: Comprehend Medical plus the AU mobile backstop, merged.
-    # Always via get_all_entities() rather than detect_phi() directly, so
-    # this path cannot silently lose the backstop.
     entities = get_all_entities(client, text)
+    redacted_text, audit_records = redact(text, entities, min_score=MIN_SCORE)
 
-    # Redaction at the FR-4 threshold, settled 2026-09-07 — see
-    # docs/decision-log.md, "FR-4 resolved: min_score = 0.001".
-    redacted_text, audit = redact(text, entities, min_score=0.001)
-    print(redacted_text)
+    key = load_encryption_key()
+    output_dir = get_output_directory()
+    report = build_report(redacted_text, audit_records, entities, key,
+                           min_score=MIN_SCORE, review_threshold=REVIEW_THRESHOLD)
+    report_path = write_report(report, output_dir)
 
+    print(f"Report written to {report_path}")
 
 if __name__ == "__main__":
     main()
