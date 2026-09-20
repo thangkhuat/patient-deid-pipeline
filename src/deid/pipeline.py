@@ -1,14 +1,24 @@
-"""Entry point: load a note, detect PHI, redact it, print the result."""
+"""Entry point: load a note, detect PHI, redact it, write the report."""
 
 import boto3
 from pathlib import Path
-from src.deid.report import get_output_directory, load_encryption_key, build_report, write_report
+from src.deid.report import (
+    REVIEW_THRESHOLD,
+    build_report,
+    get_output_directory,
+    load_encryption_key,
+    write_report,
+)
 from src.deid.redact import redact
 from src.deid.resolve_entities import get_all_entities
 
 
+# The FR-4 threshold, settled 2026-09-07 -- see docs/decision-log.md,
+# "FR-4 resolved: min_score = 0.001". Derived from a stated cost ratio
+# and measured scores, not a tuning knob: raising it silently leaves
+# low-confidence PHI in the text. Changing it is a decision-log change.
 MIN_SCORE = 0.001
-REVIEW_THRESHOLD = 0.8
+
 
 def load_note(path: str) -> str:
     """Read a clinical note (plaintext) from disk.
@@ -18,12 +28,17 @@ def load_note(path: str) -> str:
         return file.read()
 
 
-def main():
+def main() -> None:
     session = boto3.Session(profile_name="patient-deid")
     client = session.client("comprehendmedical", region_name="ap-southeast-2")
-    note_path = Path(__file__).parent.parent.parent / "tests" / "fixtures" / "review_queue_demo_note.txt"
+    note_path = Path(__file__).parent.parent.parent / "tests" / "fixtures" / "sample_note.txt"
 
     text = load_note(note_path)
+
+    # Detection: Comprehend Medical plus the AU mobile backstop, merged.
+    # Always via get_all_entities() rather than detect_phi() directly, so
+    # this path cannot silently lose the backstop -- the failure mode is a
+    # note that looks cleanly redacted with a phone number still in it.
     entities = get_all_entities(client, text)
     redacted_text, audit_records = redact(text, entities, min_score=MIN_SCORE)
 
@@ -34,6 +49,7 @@ def main():
     report_path = write_report(report, output_dir)
 
     print(f"Report written to {report_path}")
+
 
 if __name__ == "__main__":
     main()

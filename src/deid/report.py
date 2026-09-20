@@ -24,6 +24,11 @@ from datetime import datetime
 from cryptography.fernet import Fernet
 
 
+# Entities scoring below this are flagged into the review queue. Settled
+# value -- see docs/decision-log.md for the banding this comes from.
+REVIEW_THRESHOLD = 0.8
+
+
 def get_output_directory() -> Path:
     """Resolve the report output directory, creating it if needed.
 
@@ -33,7 +38,6 @@ def get_output_directory() -> Path:
 
     Returns:
         The resolved, existing directory path.
-
     """
     output_dir = Path(os.getenv("LOCALAPPDATA")) / "patient-deid-pipeline" / "output"
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -51,9 +55,10 @@ def load_encryption_key() -> bytes:
     Returns:
         The key as bytes, ready to pass to Fernet(key).
 
-    Decide explicitly what happens when the env var is
-    missing -- which exception, and what message tells the operator
-    exactly what to do (run the setx command from decision-log.md).
+    Raises:
+        EnvironmentError: the variable is unset. The message carries the
+        setx command from decision-log.md, so the failure tells the
+        operator exactly what to run rather than just what went wrong.
     """
     key = os.getenv("PATIENT_DEID_ENCRYPTION_KEY")
     if key is None:
@@ -71,16 +76,14 @@ def encrypt_flagged_content(text: str, key: bytes) -> str:
 
     Returns:
         Ciphertext as a string, ready to drop directly into a JSON
-        audit record's "content_encrypted" field.
-
-    Fernet's encrypt() returns bytes -- decide how
-    that becomes a JSON-safe string (Fernet's own output is already
-    base64, so check whether an extra encode/decode step is actually
-    needed or whether it's redundant).
+        audit record's "content_encrypted" field. Fernet already emits
+        URL-safe base64, so a plain .decode() is all that stands between
+        its bytes and JSON -- no second encoding step is needed.
     """
     fernet = Fernet(key)
     encrypted_bytes = fernet.encrypt(text.encode())
     return encrypted_bytes.decode()
+
 
 def decrypt_flagged_content(ciphertext: str, key: bytes) -> str:
     """Decrypt one review_queue entry's content back to plaintext.
@@ -121,19 +124,20 @@ def identify_entities_for_review(entities: list[dict], review_threshold: float) 
             returned it -- NOT audit_records, and not anything that has
             already been through redact().
         review_threshold: entities scoring below this get flagged.
-            Currently 0.8 -- see decision-log.md for why.
+            Defaults to REVIEW_THRESHOLD above -- see decision-log.md
+            for where that value comes from.
 
     Returns:
         The subset of entities scoring below review_threshold, each
         still carrying its original Type, Score, and Text fields
         unchanged.
-
     """
     return [entity for entity in entities if entity["Score"] < review_threshold]
 
 
 def build_report(redacted_text: str, audit_records: list[dict], entities: list[dict],
-                  key: bytes, min_score: float, review_threshold: float = 0.8) -> dict:
+                  key: bytes, min_score: float,
+                  review_threshold: float = REVIEW_THRESHOLD) -> dict:
     """Assemble the final report from two genuinely independent sources.
 
     Source 1 -- redact()'s own output, passed through unmodified:
@@ -167,11 +171,11 @@ def build_report(redacted_text: str, audit_records: list[dict], entities: list[d
         min_score: the same threshold redact() used, so each
             review_queue record's action can be independently verified
             rather than assumed to match.
-        review_threshold: see decision-log.md -- currently 0.8.
+        review_threshold: defaults to REVIEW_THRESHOLD above; see
+            decision-log.md for where that value comes from.
 
     Returns:
         {"redacted_text": ..., "audit_records": [...], "review_queue": [...]}
-
     """
     review_queue = []
     for entity in identify_entities_for_review(entities, review_threshold):
@@ -205,7 +209,6 @@ def write_report(report: dict, output_dir: Path) -> Path:
 
     Returns:
         The full path of the file actually written.
-
     """
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"report_{timestamp}.json"

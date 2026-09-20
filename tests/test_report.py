@@ -10,12 +10,12 @@ import json
 
 import pytest
 from cryptography.fernet import Fernet, InvalidToken
-from src.deid.report import decrypt_flagged_content
 
 from src.deid.report import (
     get_output_directory,
     load_encryption_key,
     encrypt_flagged_content,
+    decrypt_flagged_content,
     identify_entities_for_review,
     build_report,
     write_report,
@@ -82,9 +82,6 @@ def test_decrypt_flagged_content_fails_loudly_on_wrong_key():
     ciphertext = encrypt_flagged_content("occupational therapy department", key)
     with pytest.raises(InvalidToken):
         decrypt_flagged_content(ciphertext, wrong_key)
-
-
-# --- get_output_directory --------------------------------------------------
 
 
 # --- identify_entities_for_review ---------------------------------------
