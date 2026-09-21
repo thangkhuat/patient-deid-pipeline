@@ -2,6 +2,16 @@
 
 Newest first. Each entry: decision, rationale, alternatives considered.
 
+## Phase 3.5 added — frontend was never part of the original scope
+
+*2026-09-20.* The original five-phase roadmap never included a user-facing
+interface. Surfaced when reviewing what "the Operator has a working
+interface" actually meant in practice — pipeline.py hardcodes its input
+path, so processing a new note required editing source code, not just
+running a command. Static frontend (S3 + CloudFront) plus a separate
+Upload API (API Gateway + Lambda), kept deliberately split per the
+same one-identity-one-purpose principle used throughout Phase 3.
+
 ## ADDRESS false positives on "[specialty] + [place noun]" phrases — accepted, not fixed
 
 *2026-09-07, expanded 2026-09-17.* Round 2 of FR-4's threshold corpus (60 no-PHI sentences) surfaced one false
