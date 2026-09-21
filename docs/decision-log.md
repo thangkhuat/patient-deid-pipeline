@@ -2,6 +2,85 @@
 
 Newest first. Each entry: decision, rationale, alternatives considered.
 
+## Phase 3 infrastructure: Terraform project and input-notes fully provisioned
+
+*2026-09-21.*
+
+Dedicated, separate Terraform state for this project -- not shared with
+portfolio-infra, matching the one-identity-one-purpose principle already
+applied to patient-deid. Local backend chosen deliberately over S3-backed
+remote state: one operator, one machine, right now -- locking, multi-machine
+access, and automatic version history all solve problems that don't exist
+yet (CI/CD and collaboration are Phase 4 territory). State file lives at
+%LOCALAPPDATA%\patient-deid-pipeline\terraform-state\, outside OneDrive's
+sync scope, via an explicit backend "local" { path = ... } block -- the
+default would otherwise write state into the same folder as the .tf source
+files, which live inside the OneDrive-synced repo.
+
+Provisioning identity kept separate from runtime identity: a new IAM user
+(terraform-patient-deid, PowerUserAccess) dedicated purely to running
+Terraform. Discovered necessary directly: patient-deid (scoped to
+comprehendmedical:DetectPHI only) correctly failed with AccessDenied the
+moment Terraform tried to use it to create an IAM role -- least privilege
+working exactly as designed, against the wrong identity for the job.
+PowerUserAccess itself excludes all iam:* actions by design (AWS's stated
+purpose: prevents a PowerUser creating broader permissions for themselves),
+so a narrow inline policy was added to terraform-patient-deid granting only
+role-lifecycle actions plus PassRole, scoped by ARN to
+patient-deid-pipeline-* -- manages every role this project creates,
+structurally incapable of touching patient-deid, terraform-portfolio, or
+anything unrelated.
+
+Pipeline Lambda uses an IAM role, not a user -- the upgrade flagged as the
+eventual target when patient-deid was first created. No long-lived
+credentials: Lambda's service assumes the role at invocation, temporary
+credentials expire on their own. Trust policy restricts assumption to
+lambda.amazonaws.com exclusively.
+
+input-notes KMS key: administrator/user split, not a single broad grant.
+First draft used the common root-principal "kms:*" idiom -- caught before
+applying that this would let terraform-patient-deid (via PowerUserAccess,
+which does not exclude kms: actions) decrypt the key, defeating the
+Lambda-only goal entirely. Replaced with two named statements:
+terraform-patient-deid gets management actions only, kms:Decrypt
+deliberately absent; pipeline_lambda's role gets exactly kms:Decrypt and
+kms:DescribeKey, nothing else -- matches AWS's own "key administrators" vs
+"key users" terminology precisely. Key rotation enabled (365-day default,
+all prior generations retained automatically, nothing ever becomes
+unreadable). Deletion window set to the maximum 30 days: full destruction
+makes every note encrypted under this key permanently unreadable, and
+there's no real cost to maximizing the window to notice and cancel an
+accidental or malicious deletion first.
+
+Accepted cost, worth stating rather than leaving implicit: without the
+root-principal statement, this key has no generic account-level rescue
+path if the two named grants above are ever misconfigured or accidentally
+removed -- AWS's own default key policy includes that root statement
+specifically to guard against this exact lockout scenario.
+terraform-patient-deid's own management permissions are the sole route to
+ever administering this key again; losing that identity's access would
+mean losing the ability to manage the key at all, not just losing decrypt
+capability. Judged acceptable here, since the alternative (broad decrypt
+exposure through an overly-permissive identity) was the worse of the two
+real risks -- but worth remembering if terraform-patient-deid's own
+permissions are ever restructured later.
+
+input-notes bucket: SSE-KMS referencing the key above,
+aws_s3_bucket_public_access_block applied unconditionally regardless of
+what any policy might otherwise permit. pipeline_lambda granted exactly
+one permission here -- s3:GetObject, scoped with the object-level ARN
+suffix (bucket-arn/*), not the bare bucket ARN, since S3 distinguishes
+bucket-level and object-level actions by ARN shape and the wrong shape
+silently matches nothing.
+
+Known, accepted gap: this bucket's identity-paradox limitation, named when
+first discussed -- the role that legitimately needs to decrypt and read it
+is the same identity a breach would most likely compromise, since PHI
+detection genuinely requires plaintext. No encryption scheme resolves
+this; the planned mitigation is a short-retention lifecycle policy, not
+yet implemented.
+
+
 ## Phase 3.5 added — frontend was never part of the original scope
 
 *2026-09-20.* The original five-phase roadmap never included a user-facing

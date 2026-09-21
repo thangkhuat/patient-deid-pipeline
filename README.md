@@ -35,8 +35,8 @@ tracked in [`docs/decision-log.md`](docs/decision-log.md).
 | Phase | Scope | Status |
 |---|---|---|
 | 1. Requirements & repo | This doc set | ✅ Done |
-| 2. Application | Local `detect_phi()` + `redact()` proof of concept, no AWS infra | 🔜 In progress |
-| 3. Infrastructure | Terraform: S3, IAM, KMS, VPC | Not started |
+| 2. Application | Local `detect_phi()` + `redact()` proof of concept, no AWS infra | ✅ Done |
+| 3. Infrastructure | Terraform: S3, IAM, KMS, VPC | 🔜 In progress |
 | 3.5 | Frontend / Operator UI (API Gateway upload endpoint, static site) | Not in original scope — added 2026-09-20 after discovering the CLI required source-code edits to process a new file, with no real operator-facing path |
 | 4. CI/CD | Automated testing + deploy pipeline | Not started |
 | 5. Security hardening | Least-privilege IAM, audit logging | Not started |
@@ -66,3 +66,27 @@ python -m pytest -m live    # opt-in; calls real AWS
 
 `tests/fixtures/` contains synthetic clinical notes only. No real PHI has
 ever been or will be committed to this repository.
+
+## Architecture
+
+```mermaid
+flowchart TD
+    Browser["Browser (Operator)"] -->|TLS| UploadBackend["Upload Backend"]
+    UploadBackend -->|TLS, PutObject only| InputBucket["input-notes bucket (SSE-KMS, Lambda-only)"]
+    InputBucket -->|S3 event| Lambda["Pipeline Lambda"]
+    Lambda -->|DetectPHI, TLS| Comprehend["Comprehend Medical"]
+    Lambda --> RedactedBucket["redacted-output bucket (SSE-KMS, shareable)"]
+    Lambda --> ReviewBucket["review-artifacts bucket (client-side encrypted)"]
+    RedactedBucket --> Downstream["Downstream consumer"]
+    ReviewBucket -->|kms:Decrypt| Reviewer["Reviewer"]
+
+    classDef built fill:#d4edda,stroke:#28a745,color:#000
+    classDef planned fill:#f8f9fa,stroke:#6c757d,stroke-dasharray: 5 5,color:#000
+
+    class InputBucket built
+    class UploadBackend,Lambda,Comprehend,RedactedBucket,ReviewBucket planned
+```
+
+Green, solid — actually provisioned in AWS via Terraform. Gray, dashed —
+designed and decided, not yet built. See `docs/decision-log.md` for the
+reasoning behind each piece.
