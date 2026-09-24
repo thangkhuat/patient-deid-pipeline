@@ -36,9 +36,9 @@ tracked in [`docs/decision-log.md`](docs/decision-log.md).
 |---|---|---|
 | 1. Requirements & repo | This doc set | ✅ Done |
 | 2. Application | Local `detect_phi()` + `redact()` proof of concept, no AWS infra | ✅ Done |
-| 3. Infrastructure | Terraform: S3, IAM, KMS, VPC | 🔜 In progress |
-| 3.5 | Frontend / Operator UI (API Gateway upload endpoint, static site) | Not in original scope — added 2026-09-20 after discovering the CLI required source-code edits to process a new file, with no real operator-facing path |
-| 4. CI/CD | Automated testing + deploy pipeline | Not started |
+| 3. Infrastructure | Terraform: S3, IAM, KMS, VPC | ✅ Done |
+| 3.5. Frontend / Operator UI (API Gateway upload endpoint, static site)| Not in original scope — added 2026-09-20 after discovering the CLI required source-code edits to process a new file, with no real operator-facing path | ✅ Done |
+| 4. CI/CD | Automated testing + deploy pipeline | 🔜 In progress |
 | 5. Security hardening | Least-privilege IAM, audit logging | Not started |
 
 ## Docs

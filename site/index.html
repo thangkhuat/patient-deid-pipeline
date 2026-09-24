@@ -1,3 +1,139 @@
-<!-- site/index.html -->
 <!DOCTYPE html>
-<html><body><h1>patient-deid-pipeline — placeholder</h1></body></html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Patient De-Identification Pipeline</title>
+<style>
+  :root {
+    --bg: #f7f7f8; --card-bg: #ffffff; --text: #1a1a1a; --muted: #6b7280;
+    --border: #e5e7eb; --primary: #2563eb; --primary-hover: #1d4ed8;
+    --success-bg: #ecfdf5; --success-border: #10b981;
+    --error-bg: #fef2f2; --error-border: #ef4444;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: var(--bg); color: var(--text); margin: 0; padding: 40px 20px;
+    display: flex; justify-content: center;
+  }
+  .card {
+    background: var(--card-bg); border: 1px solid var(--border); border-radius: 12px;
+    padding: 32px; max-width: 640px; width: 100%; box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+  }
+  h1 { font-size: 1.4rem; margin: 0 0 4px; }
+  p.subtitle { color: var(--muted); margin: 0 0 24px; font-size: 0.9rem; }
+  .file-row { margin-bottom: 16px; }
+  .file-row label { font-size: 0.88rem; color: var(--muted); display: block; margin-bottom: 6px; }
+  textarea {
+    width: 100%; min-height: 220px; padding: 12px; border: 1px solid var(--border);
+    border-radius: 8px; font-family: inherit; font-size: 0.95rem; resize: vertical;
+  }
+  textarea:focus { outline: none; border-color: var(--primary); }
+  .meta-row { display: flex; justify-content: space-between; margin-top: 8px; font-size: 0.82rem; color: var(--muted); }
+  .meta-row.over-limit { color: var(--error-border); font-weight: 600; }
+  button {
+    margin-top: 16px; background: var(--primary); color: white; border: none;
+    padding: 12px 20px; border-radius: 8px; font-size: 0.95rem; font-weight: 600;
+    cursor: pointer; width: 100%;
+  }
+  button:hover:not(:disabled) { background: var(--primary-hover); }
+  button:disabled { background: var(--border); color: var(--muted); cursor: not-allowed; }
+  .result { margin-top: 16px; padding: 12px 14px; border-radius: 8px; font-size: 0.88rem; display: none; word-break: break-word; }
+  .result.success { display: block; background: var(--success-bg); border: 1px solid var(--success-border); }
+  .result.error { display: block; background: var(--error-bg); border: 1px solid var(--error-border); }
+  .result code { background: rgba(0,0,0,0.06); padding: 1px 5px; border-radius: 4px; font-size: 0.85em; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>Patient De-Identification Pipeline</h1>
+    <p class="subtitle">Submit clinical note text for automatic PHI redaction. Processing happens asynchronously -- this page confirms submission, not completion.</p>
+
+    <div class="file-row">
+      <label for="fileInput">Upload a .txt file, or paste text directly below</label>
+      <input type="file" id="fileInput" accept=".txt,text/plain">
+    </div>
+
+    <textarea id="noteContent" placeholder="Paste or type clinical note text here..."></textarea>
+    <div class="meta-row" id="charCount">0 / 20,000 characters</div>
+
+    <button id="submitBtn" type="button">Submit for processing</button>
+
+    <div class="result" id="result"></div>
+  </div>
+
+<script>
+  const CHAR_LIMIT = 20000;
+  const UPLOAD_URL = "https://s91h2b7zm0.execute-api.ap-southeast-2.amazonaws.com/upload";
+
+  const fileInput = document.getElementById("fileInput");
+  const textarea = document.getElementById("noteContent");
+  const charCount = document.getElementById("charCount");
+  const submitBtn = document.getElementById("submitBtn");
+  const result = document.getElementById("result");
+
+  function updateCharCount() {
+    const len = textarea.value.length;
+    const overLimit = len > CHAR_LIMIT;
+    charCount.textContent = `${len.toLocaleString()} / ${CHAR_LIMIT.toLocaleString()} characters`;
+    charCount.classList.toggle("over-limit", overLimit);
+    submitBtn.disabled = overLimit || len === 0;
+  }
+  textarea.addEventListener("input", updateCharCount);
+  updateCharCount();
+
+  fileInput.addEventListener("change", () => {
+    const file = fileInput.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      textarea.value = e.target.result;
+      updateCharCount();
+    };
+    reader.onerror = () => {
+      result.className = "result error";
+      result.textContent = "Could not read the selected file.";
+    };
+    reader.readAsText(file);
+  });
+
+  submitBtn.addEventListener("click", async () => {
+    const content = textarea.value;
+    if (!content || content.length > CHAR_LIMIT) return;
+
+    submitBtn.disabled = true;
+    submitBtn.textContent = "Submitting...";
+    result.className = "result";
+    result.textContent = "";
+
+    try {
+      const response = await fetch(UPLOAD_URL, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ content })
+      });
+      const data = await response.json();
+
+      if (response.ok) {
+        result.className = "result success";
+        result.innerHTML = `Accepted for processing. Reference ID: <code>${data.id}</code>`;
+        textarea.value = "";
+        fileInput.value = "";
+        updateCharCount();
+      } else {
+        result.className = "result error";
+        result.textContent = data.error || "Submission failed.";
+      }
+    } catch (err) {
+      result.className = "result error";
+      result.textContent = "Network error -- could not reach the upload service.";
+    } finally {
+      submitBtn.textContent = "Submit for processing";
+      updateCharCount();
+    }
+  });
+</script>
+</body>
+</html>

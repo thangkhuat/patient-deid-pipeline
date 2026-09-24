@@ -2,6 +2,61 @@
 
 Newest first. Each entry: decision, rationale, alternatives considered.
 
+## Real frontend built and deployed; full pipeline verified end-to-end
+## by an actual user through the actual UI
+
+*2026-09-24.*
+
+Closes out index.html as a genuine, working page -- textarea with live
+character-count feedback against Comprehend Medical's 20,000-character
+limit, async-honest status handling (submission confirmed, not
+completion -- matches upload_backend's own 202 semantics, never implying
+a result the page can't actually confirm), and a file picker layered on
+top via FileReader, not a separate upload mechanism.
+
+Deliberately kept both the file picker and the textarea rather than
+replacing one with the other, considered explicitly rather than defaulted
+into:
+- The textarea is the only point where a person sees content before it
+  submits -- FileReader loads a selected file's text into it, but
+  nothing auto-submits. That gap is a real review step: catching a wrong
+  file, noticing an over-limit note before it's rejected, just seeing
+  what's about to leave the browser. Removing it would mean file
+  selection submits blind, with no chance to check or edit first.
+- Not every real note starts as a file on disk. A common clinical
+  workflow is copying text directly out of another on-screen system (an
+  EHR's own display, for instance) with no "save as file" step at all --
+  the file picker serves "I have a file," the textarea serves "I'm
+  copying this from something I'm looking at right now." Different
+  input paths, not one being redundant with the other.
+- Practically, every test this entire session -- from the first DevTools
+  fetch() call through every verification since -- has gone through
+  pasted or typed text. Removing that path would make quick testing
+  meaningfully more annoying going forward, for no real gain.
+
+fileInput.value is explicitly cleared alongside textarea.value on a
+successful submission -- without it, the file input keeps showing the
+previously-selected filename even after the form has visibly reset,
+a small but real stale-UI-state bug worth avoiding deliberately rather
+than discovering later.
+
+**Final verification, the one this whole build has been building toward:**
+a review-queue-triggering note (scoring below review_threshold, same
+category as the "occupational therapy department" example used
+throughout this project's threshold work) submitted through the actual
+deployed form -- not a script, not a console-pasted fetch(), a real
+person clicking through a real page. Confirmed present, with matching
+reference IDs, in both redacted-output and review-artifacts. This is the
+first time the complete chain -- browser form, CORS, API Gateway,
+upload_backend, the S3 trigger, pipeline_lambda, Comprehend Medical,
+redaction, the artifact split, both encryption paths -- has been
+exercised entirely as an end user would, rather than through a
+developer-facing substitute for one at any point in the chain.
+
+Phase 3 and Phase 3.5 are both complete as a result: every piece
+designed across this project's infrastructure work is now proven working
+together, not just individually correct or reasoned about on paper.
+
 ## Frontend hosting (CloudFront + S3) built and CORS closed -- full
 ## browser-to-pipeline chain verified
 
