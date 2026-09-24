@@ -2,12 +2,47 @@
 
 Newest first. Each entry: decision, rationale, alternatives considered.
 
+## Frontend split from the Upload API: static site, not a combined backend service
+
+*2026-09-24 (retroactive -- the decision itself was reasoned through and made
+in an earlier session; captured here now since it was never given its own
+entry, only referenced afterward as "several sessions back," a phrasing
+this entry exists to replace).*
+
+Chose a fully static frontend (S3 + CloudFront) calling a separate Upload
+API (API Gateway + Lambda), over a single combined service handling both
+UI-serving and uploads. Same one-identity-one-purpose principle already
+applied throughout this project's IAM design, extended one layer up to
+the architecture itself.
+
+A static site has no running server code at all -- nothing to exploit,
+nothing to patch, since there's no application process serving those
+pages in the first place. The only thing genuinely exposed to the
+internet with real logic behind it is the narrow upload endpoint,
+already scoped to writing into input-notes and nothing else. Also keeps
+the system consistent with the serverless, event-driven direction
+already chosen for the backend, rather than mixing in one traditional
+always-on service.
+
+Known, accepted cost: the frontend and the API are genuinely different
+origins, so the browser enforces CORS -- the API must explicitly declare
+which origins may call it, or a real frontend's requests get blocked
+before they reach this API. A JSON POST isn't a CORS "simple request",
+so the browser sends a preflight OPTIONS request first; with no CORS
+configuration the API never answers it correctly, and the browser
+withholds the real POST entirely. Not silent in the sense of leaving no
+trace -- the browser logs a CORS error and the calling code's fetch()
+promise rejects -- but silent from the API's own perspective, since the
+request never arrives. Not yet implemented as of the upload_backend
+deployment entry below.
+
 ## upload_backend deployed: Lambda, API Gateway, and a real end-to-end HTTP test
 
 *2026-09-24.*
 
 Closes out the IAM foundation that's existed since Phase 3.5 was first
-scoped, several sessions back, with nothing running under it.
+scoped -- see the 2026-09-20 entry, "Phase 3.5 added — frontend was
+never part of the original scope" -- with nothing running under it.
 
 upload_handler.py deliberately simple, doing exactly one job: accept JSON
 text, write it to input_notes, return without waiting for processing.
@@ -60,15 +95,30 @@ API Gateway, the Lambda, an S3 write, and triggered pipeline_lambda's
 existing chain automatically, confirmed by the resulting object appearing
 in redacted-output.
 
-Known, deliberately unresolved gap: CORS is not yet configured on this
-API. A command-line client (Invoke-RestMethod, curl) has no concept of
-CORS and will succeed regardless -- proof the backend itself is correct,
-not proof a browser-based frontend could call it yet. Browsers enforce
-CORS themselves; without an explicit configuration naming the eventual
-frontend's origin, a real webpage's fetch call would be blocked before
-the request even reaches this API. This was flagged as a known cost when
-the split frontend/API architecture was first decided, several sessions
-back, and remains open.
+Known, deliberately unresolved gaps, worth ranking by actual severity
+rather than the order they were found: POST /upload currently has no
+authorization at all -- aws_apigatewayv2_route defaults to
+authorization_type = NONE when unspecified, and this route never
+overrides it. Anyone who discovers the invoke URL can trigger a real,
+billed DetectPHI call and real S3/KMS writes, with zero authentication.
+This matters more than CORS: CORS only restricts requests originating
+from a browser's own JavaScript, with no effect on curl, a script, or
+any direct HTTP client -- precisely the kind of caller an unauthenticated
+public endpoint is actually exposed to. CORS needs fixing before a
+browser-based frontend can use this endpoint; the missing authorization
+needs fixing before this endpoint is trusted with anything beyond
+controlled testing, regardless of what calls it.
+
+The handler also does not enforce Comprehend Medical's 20,000 UTF-8
+character single-document limit on submitted content. An oversized note
+is accepted, written to S3, and returns 202 -- success, from the caller's
+perspective -- then fails inside pipeline_lambda when it actually
+attempts detection, with no path back to the original caller and no
+visible trace outside that Lambda's own CloudWatch logs.
+
+CORS was flagged as a known cost when the split frontend/API architecture
+was first decided -- see the entry above -- and remains open alongside
+these two.
 
 Cleanup: thang-admin's temporary trust-policy entry on upload_backend
 (added solely to enable STS-based testing before this Lambda existed)
@@ -177,9 +227,9 @@ non-obvious failure mode:
    access-control distinction this bucket exists to enforce).
 
 End-to-end proof, not just individually-passing pieces: the
-"occupational therapy department" test note (review_threshold's known
-example from several sessions back) was uploaded through the real
-upload_backend role via STS assumption, triggered the Lambda
+"occupational therapy department" test note (see the 2026-09-07,
+expanded 2026-09-17, ADDRESS false-positives entry) was uploaded
+through the real upload_backend role via STS assumption, triggered the Lambda
 automatically via the S3 event, and its review_queue entry was read back
 and correctly decrypted by reviewer_test -- the first genuine,
 non-manual proof that every boundary designed across this project holds
