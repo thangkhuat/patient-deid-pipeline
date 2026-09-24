@@ -2,6 +2,112 @@
 
 Newest first. Each entry: decision, rationale, alternatives considered.
 
+## Fernet key distribution has no real mechanism -- surfaced by the
+## first genuine Reviewer decrypt
+
+*2026-09-23.*
+
+reviewer_test successfully read and KMS-decrypted a review-artifacts
+object -- the outer, S3/KMS layer of protection genuinely works, gated
+correctly by real IAM policy. The inner layer does not have an
+equivalent: decrypting the actual content_encrypted value still requires
+PATIENT_DEID_ENCRYPTION_KEY, which exists only as a local environment
+variable on one machine. A genuine Reviewer, on different hardware, has
+no path to that value through anything built so far -- the outer lock is
+now identity-based and auditable; the inner one is still "whoever has
+the shared secret."
+
+Not a new problem -- this is precisely what the KMS envelope-encryption
+migration, deferred since the encryption design was first written, was
+always meant to solve: tying decrypt ability to the caller's own AWS
+identity rather than a distributed shared secret. Today's finding is the
+first concrete evidence of the cost of not having done it yet, rather
+than a new argument for doing it.
+
+## Phase 3 completed: redacted-output, review-artifacts, and the Pipeline
+## Lambda wired end-to-end
+
+*2026-09-23.*
+
+redacted-output and review-artifacts built to the same pattern already
+proven on input-notes -- bucket, SSE-KMS, public-access block, scoped IAM
+-- with one genuine difference: pipeline_lambda writes to these, so their
+KMS "user" statements grant kms:GenerateDataKey and kms:Encrypt, not
+kms:Decrypt. Confirmed via AWS's own docs that SSE-KMS PutObject requires
+kms:GenerateDataKey on the caller specifically, the write-side mirror of
+the read-side kms:Decrypt requirement already learned on input-notes.
+
+Pipeline Lambda deployed for real, closing out the role that has existed
+since early Phase 3 with nothing running under it. Packaged with the
+Linux-targeted cryptography wheel (--platform manylinux2014_x86_64),
+since a Windows-built wheel would fail silently at runtime, not at
+packaging time. Triggered via aws_s3_bucket_notification on input-notes,
+gated by a separate aws_lambda_permission scoped with source_arn to that
+one bucket specifically -- without it, principal = "s3.amazonaws.com"
+alone would permit invocation from any S3 bucket in any account, the
+"confused deputy" pattern AWS's own security guidance names explicitly.
+
+Fernet key supplied to the Lambda as a plain environment variable via a
+sensitive Terraform variable, sourced from the same PATIENT_DEID_ENCRYPTION_KEY
+already set locally via setx -- explicitly still the interim design, not
+a new decision. Known, unavoidable limitation recorded here rather than
+discovered later: Terraform's local state file necessarily contains this
+value in plaintext, since Lambda's environment configuration is part of
+the resource's tracked state. Not something the sensitive=true flag or
+the TF_VAR approach avoids -- both only keep the value out of the .tf
+source and out of plan/apply console output.
+
+Getting from a deployed function to a genuinely working one took five
+separate, real bugs, worth recording precisely since each is a distinct,
+non-obvious failure mode:
+
+1. Handler naming mismatch. lambda.tf declared
+   "src.deid.lambda_handler.handler"; the actual file was named
+   handler.py. Produced Runtime.ImportModuleError, not a permissions
+   error -- worth remembering Lambda's import path is a literal string
+   match, nothing fuzzy about it.
+2. Missing CloudWatch Logs permissions. logs:CreateLogGroup,
+   logs:CreateLogStream, and logs:PutLogEvents are not automatically
+   granted to a hand-built execution role -- confirmed against AWS's own
+   documentation. Without logs:CreateLogGroup specifically, AWS won't
+   even auto-create the log group on first invocation, which is why the
+   symptom was total silence (no log group at all) rather than an error
+   inside one. This is precisely why bug 1 was invisible until this was
+   fixed first.
+3. Missing comprehendmedical:DetectPHI. Every S3/KMS permission
+   pipeline_lambda needed had been granted; the one permission its
+   actual handler code calls first was never carried over from
+   patient-deid, the original IAM user this logic was built and tested
+   against locally.
+4. iam:CreateUser wall. terraform-patient-deid's inline policy only ever
+   covered role actions (every identity built through Terraform so far
+   had been a role) -- creating reviewer_test, the first IAM user this
+   project's Terraform ever touched, needed a new ManagePipelineUsers
+   statement added by hand through the Console, same bootstrapping
+   limitation as every previous permission-widening this project has
+   hit.
+5. KMS decrypt gaps on both output buckets, discovered by trying to
+   verify the pipeline's own output. Neither key's policy had ever named
+   an identity capable of reading back what pipeline_lambda writes --
+   correctly, by original design, since no Downstream consumer or
+   Reviewer identity existed yet. Closed by adding thang-admin to
+   redacted-output specifically (justified: content already meant to be
+   safe for an external consumer is safe for the account's own trusted
+   operator) and creating reviewer_test as a genuine, separate identity
+   for review-artifacts (declined to extend thang-admin there --
+   collapsing "account administrator" and "has legitimate clinical
+   access to this patient" into one identity would undo the actual
+   access-control distinction this bucket exists to enforce).
+
+End-to-end proof, not just individually-passing pieces: the
+"occupational therapy department" test note (review_threshold's known
+example from several sessions back) was uploaded through the real
+upload_backend role via STS assumption, triggered the Lambda
+automatically via the S3 event, and its review_queue entry was read back
+and correctly decrypted by reviewer_test -- the first genuine,
+non-manual proof that every boundary designed across this project holds
+simultaneously against real infrastructure, not just in isolation.
+
 ## Phase 3 infrastructure: Terraform project and input-notes fully provisioned
 
 *2026-09-21.*

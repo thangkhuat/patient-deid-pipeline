@@ -18,3 +18,8 @@ CLAUDE.md
 *.tfstate.backup
 .terraform/
 *.tfvars
+
+# AWS Lambda deployment packages
+lambda-package/
+upload-package/
+*.zip
