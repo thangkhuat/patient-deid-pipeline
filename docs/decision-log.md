@@ -2,6 +2,83 @@
 
 Newest first. Each entry: decision, rationale, alternatives considered.
 
+## upload_backend deployed: Lambda, API Gateway, and a real end-to-end HTTP test
+
+*2026-09-24.*
+
+Closes out the IAM foundation that's existed since Phase 3.5 was first
+scoped, several sessions back, with nothing running under it.
+
+upload_handler.py deliberately simple, doing exactly one job: accept JSON
+text, write it to input_notes, return without waiting for processing.
+Plain-text JSON body chosen over multipart/binary upload -- this
+project's own scope has never involved real binary files, only
+plaintext clinical notes (FR-1), so routing through API Gateway's
+binary-media-type handling would have solved a problem this system
+doesn't have. Response is 202, not 200: this handler's job ends at a
+successful S3 write, and has no way to know whether pipeline_lambda's
+detection and redaction, triggered independently and asynchronously by
+the resulting S3 event, ever ran. Claiming 200 would assert something
+this function can't actually confirm.
+
+Object keys are UUID-based (uuid4().txt), not derived from any
+client-supplied filename -- same "never name a file from
+patient-identifying content" principle already applied to
+write_report()'s timestamp-based filenames.
+
+Lambda deployed with meaningfully smaller timeout (10s) and memory
+(128MB) than pipeline_lambda's (30s/256MB): this function performs one
+S3 write and returns, never calls Comprehend Medical, never does
+detection or redaction work. No cryptography dependency needed either --
+boto3 alone, already bundled in Lambda's runtime, covers everything this
+handler does, so packaging is a plain zip with no platform-specific wheel
+step.
+
+API Gateway built as an HTTP API (protocol_type = "HTTP"), not a REST
+API -- AWS's own newer, simpler, cheaper offering for exactly this
+shape of single-Lambda-backed endpoint. Worth recording the naming
+collision this produced: "HTTP API" is AWS's product name for this API
+type, unrelated to transport encryption -- the actual invoke URL is
+https-only regardless, confirmed against AWS's own SDK documentation,
+which uniformly writes the default execute-api endpoint as
+https://{api_id}.execute-api.{region}.amazonaws.com with no plain-HTTP
+option offered anywhere.
+
+A second aws_lambda_permission was needed, scoped with source_arn to
+this specific API's execution ARN -- the same "confused deputy"
+protection already applied to input_notes' S3 trigger, now against a
+different calling service (apigateway.amazonaws.com instead of
+s3.amazonaws.com). Same underlying AWS security pattern, second
+independent instance of needing it.
+
+Verified with a genuine external HTTP request (Invoke-RestMethod), not
+just a Lambda console test event -- the console test had already proven
+the handler's own logic correct (both the success path and, deliberately,
+the malformed-body 400 path), but not that a real caller outside AWS
+could reach it. This request round-tripped through the public internet,
+API Gateway, the Lambda, an S3 write, and triggered pipeline_lambda's
+existing chain automatically, confirmed by the resulting object appearing
+in redacted-output.
+
+Known, deliberately unresolved gap: CORS is not yet configured on this
+API. A command-line client (Invoke-RestMethod, curl) has no concept of
+CORS and will succeed regardless -- proof the backend itself is correct,
+not proof a browser-based frontend could call it yet. Browsers enforce
+CORS themselves; without an explicit configuration naming the eventual
+frontend's origin, a real webpage's fetch call would be blocked before
+the request even reaches this API. This was flagged as a known cost when
+the split frontend/API architecture was first decided, several sessions
+back, and remains open.
+
+Cleanup: thang-admin's temporary trust-policy entry on upload_backend
+(added solely to enable STS-based testing before this Lambda existed)
+has been reverted -- the role's trust policy is back to lambda.amazonaws.com
+only. reviewer_test is kept, not torn down: narrowly scoped, and useful
+for testing the still-open Fernet key distribution gap whenever that
+work happens. Its name honestly reflects "test identity," not "the real,
+permanent Reviewer" -- a promotion decision deliberately left for later,
+not resolved here.
+
 ## Fernet key distribution has no real mechanism -- surfaced by the
 ## first genuine Reviewer decrypt
 
