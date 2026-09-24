@@ -2,6 +2,328 @@
 
 Newest first. Each entry: decision, rationale, alternatives considered.
 
+## Frontend split from the Upload API: static site, not a combined backend service
+
+*2026-09-24 (retroactive -- the decision itself was reasoned through and made
+in an earlier session; captured here now since it was never given its own
+entry, only referenced afterward as "several sessions back," a phrasing
+this entry exists to replace).*
+
+Chose a fully static frontend (S3 + CloudFront) calling a separate Upload
+API (API Gateway + Lambda), over a single combined service handling both
+UI-serving and uploads. Same one-identity-one-purpose principle already
+applied throughout this project's IAM design, extended one layer up to
+the architecture itself.
+
+A static site has no running server code at all -- nothing to exploit,
+nothing to patch, since there's no application process serving those
+pages in the first place. The only thing genuinely exposed to the
+internet with real logic behind it is the narrow upload endpoint,
+already scoped to writing into input-notes and nothing else. Also keeps
+the system consistent with the serverless, event-driven direction
+already chosen for the backend, rather than mixing in one traditional
+always-on service.
+
+Known, accepted cost: the frontend and the API are genuinely different
+origins, so the browser enforces CORS -- the API must explicitly declare
+which origins may call it, or a real frontend's requests get blocked
+before they reach this API. A JSON POST isn't a CORS "simple request",
+so the browser sends a preflight OPTIONS request first; with no CORS
+configuration the API never answers it correctly, and the browser
+withholds the real POST entirely. Not silent in the sense of leaving no
+trace -- the browser logs a CORS error and the calling code's fetch()
+promise rejects -- but silent from the API's own perspective, since the
+request never arrives. Not yet implemented as of the upload_backend
+deployment entry below.
+
+## upload_backend deployed: Lambda, API Gateway, and a real end-to-end HTTP test
+
+*2026-09-24.*
+
+Closes out the IAM foundation that's existed since Phase 3.5 was first
+scoped -- see the 2026-09-20 entry, "Phase 3.5 added — frontend was
+never part of the original scope" -- with nothing running under it.
+
+upload_handler.py deliberately simple, doing exactly one job: accept JSON
+text, write it to input_notes, return without waiting for processing.
+Plain-text JSON body chosen over multipart/binary upload -- this
+project's own scope has never involved real binary files, only
+plaintext clinical notes (FR-1), so routing through API Gateway's
+binary-media-type handling would have solved a problem this system
+doesn't have. Response is 202, not 200: this handler's job ends at a
+successful S3 write, and has no way to know whether pipeline_lambda's
+detection and redaction, triggered independently and asynchronously by
+the resulting S3 event, ever ran. Claiming 200 would assert something
+this function can't actually confirm.
+
+Object keys are UUID-based (uuid4().txt), not derived from any
+client-supplied filename -- same "never name a file from
+patient-identifying content" principle already applied to
+write_report()'s timestamp-based filenames.
+
+Lambda deployed with meaningfully smaller timeout (10s) and memory
+(128MB) than pipeline_lambda's (30s/256MB): this function performs one
+S3 write and returns, never calls Comprehend Medical, never does
+detection or redaction work. No cryptography dependency needed either --
+boto3 alone, already bundled in Lambda's runtime, covers everything this
+handler does, so packaging is a plain zip with no platform-specific wheel
+step.
+
+API Gateway built as an HTTP API (protocol_type = "HTTP"), not a REST
+API -- AWS's own newer, simpler, cheaper offering for exactly this
+shape of single-Lambda-backed endpoint. Worth recording the naming
+collision this produced: "HTTP API" is AWS's product name for this API
+type, unrelated to transport encryption -- the actual invoke URL is
+https-only regardless, confirmed against AWS's own SDK documentation,
+which uniformly writes the default execute-api endpoint as
+https://{api_id}.execute-api.{region}.amazonaws.com with no plain-HTTP
+option offered anywhere.
+
+A second aws_lambda_permission was needed, scoped with source_arn to
+this specific API's execution ARN -- the same "confused deputy"
+protection already applied to input_notes' S3 trigger, now against a
+different calling service (apigateway.amazonaws.com instead of
+s3.amazonaws.com). Same underlying AWS security pattern, second
+independent instance of needing it.
+
+Verified with a genuine external HTTP request (Invoke-RestMethod), not
+just a Lambda console test event -- the console test had already proven
+the handler's own logic correct (both the success path and, deliberately,
+the malformed-body 400 path), but not that a real caller outside AWS
+could reach it. This request round-tripped through the public internet,
+API Gateway, the Lambda, an S3 write, and triggered pipeline_lambda's
+existing chain automatically, confirmed by the resulting object appearing
+in redacted-output.
+
+Known, deliberately unresolved gaps, worth ranking by actual severity
+rather than the order they were found: POST /upload currently has no
+authorization at all -- aws_apigatewayv2_route defaults to
+authorization_type = NONE when unspecified, and this route never
+overrides it. Anyone who discovers the invoke URL can trigger a real,
+billed DetectPHI call and real S3/KMS writes, with zero authentication.
+This matters more than CORS: CORS only restricts requests originating
+from a browser's own JavaScript, with no effect on curl, a script, or
+any direct HTTP client -- precisely the kind of caller an unauthenticated
+public endpoint is actually exposed to. CORS needs fixing before a
+browser-based frontend can use this endpoint; the missing authorization
+needs fixing before this endpoint is trusted with anything beyond
+controlled testing, regardless of what calls it.
+
+The handler also does not enforce Comprehend Medical's 20,000 UTF-8
+character single-document limit on submitted content. An oversized note
+is accepted, written to S3, and returns 202 -- success, from the caller's
+perspective -- then fails inside pipeline_lambda when it actually
+attempts detection, with no path back to the original caller and no
+visible trace outside that Lambda's own CloudWatch logs.
+
+CORS was flagged as a known cost when the split frontend/API architecture
+was first decided -- see the entry above -- and remains open alongside
+these two.
+
+Cleanup: thang-admin's temporary trust-policy entry on upload_backend
+(added solely to enable STS-based testing before this Lambda existed)
+has been reverted -- the role's trust policy is back to lambda.amazonaws.com
+only. reviewer_test is kept, not torn down: narrowly scoped, and useful
+for testing the still-open Fernet key distribution gap whenever that
+work happens. Its name honestly reflects "test identity," not "the real,
+permanent Reviewer" -- a promotion decision deliberately left for later,
+not resolved here.
+
+## Fernet key distribution has no real mechanism -- surfaced by the
+## first genuine Reviewer decrypt
+
+*2026-09-23.*
+
+reviewer_test successfully read and KMS-decrypted a review-artifacts
+object -- the outer, S3/KMS layer of protection genuinely works, gated
+correctly by real IAM policy. The inner layer does not have an
+equivalent: decrypting the actual content_encrypted value still requires
+PATIENT_DEID_ENCRYPTION_KEY, which exists only as a local environment
+variable on one machine. A genuine Reviewer, on different hardware, has
+no path to that value through anything built so far -- the outer lock is
+now identity-based and auditable; the inner one is still "whoever has
+the shared secret."
+
+Not a new problem -- this is precisely what the KMS envelope-encryption
+migration, deferred since the encryption design was first written, was
+always meant to solve: tying decrypt ability to the caller's own AWS
+identity rather than a distributed shared secret. Today's finding is the
+first concrete evidence of the cost of not having done it yet, rather
+than a new argument for doing it.
+
+## Phase 3 completed: redacted-output, review-artifacts, and the Pipeline
+## Lambda wired end-to-end
+
+*2026-09-23.*
+
+redacted-output and review-artifacts built to the same pattern already
+proven on input-notes -- bucket, SSE-KMS, public-access block, scoped IAM
+-- with one genuine difference: pipeline_lambda writes to these, so their
+KMS "user" statements grant kms:GenerateDataKey and kms:Encrypt, not
+kms:Decrypt. Confirmed via AWS's own docs that SSE-KMS PutObject requires
+kms:GenerateDataKey on the caller specifically, the write-side mirror of
+the read-side kms:Decrypt requirement already learned on input-notes.
+
+Pipeline Lambda deployed for real, closing out the role that has existed
+since early Phase 3 with nothing running under it. Packaged with the
+Linux-targeted cryptography wheel (--platform manylinux2014_x86_64),
+since a Windows-built wheel would fail silently at runtime, not at
+packaging time. Triggered via aws_s3_bucket_notification on input-notes,
+gated by a separate aws_lambda_permission scoped with source_arn to that
+one bucket specifically -- without it, principal = "s3.amazonaws.com"
+alone would permit invocation from any S3 bucket in any account, the
+"confused deputy" pattern AWS's own security guidance names explicitly.
+
+Fernet key supplied to the Lambda as a plain environment variable via a
+sensitive Terraform variable, sourced from the same PATIENT_DEID_ENCRYPTION_KEY
+already set locally via setx -- explicitly still the interim design, not
+a new decision. Known, unavoidable limitation recorded here rather than
+discovered later: Terraform's local state file necessarily contains this
+value in plaintext, since Lambda's environment configuration is part of
+the resource's tracked state. Not something the sensitive=true flag or
+the TF_VAR approach avoids -- both only keep the value out of the .tf
+source and out of plan/apply console output.
+
+Getting from a deployed function to a genuinely working one took five
+separate, real bugs, worth recording precisely since each is a distinct,
+non-obvious failure mode:
+
+1. Handler naming mismatch. lambda.tf declared
+   "src.deid.lambda_handler.handler"; the actual file was named
+   handler.py. Produced Runtime.ImportModuleError, not a permissions
+   error -- worth remembering Lambda's import path is a literal string
+   match, nothing fuzzy about it.
+2. Missing CloudWatch Logs permissions. logs:CreateLogGroup,
+   logs:CreateLogStream, and logs:PutLogEvents are not automatically
+   granted to a hand-built execution role -- confirmed against AWS's own
+   documentation. Without logs:CreateLogGroup specifically, AWS won't
+   even auto-create the log group on first invocation, which is why the
+   symptom was total silence (no log group at all) rather than an error
+   inside one. This is precisely why bug 1 was invisible until this was
+   fixed first.
+3. Missing comprehendmedical:DetectPHI. Every S3/KMS permission
+   pipeline_lambda needed had been granted; the one permission its
+   actual handler code calls first was never carried over from
+   patient-deid, the original IAM user this logic was built and tested
+   against locally.
+4. iam:CreateUser wall. terraform-patient-deid's inline policy only ever
+   covered role actions (every identity built through Terraform so far
+   had been a role) -- creating reviewer_test, the first IAM user this
+   project's Terraform ever touched, needed a new ManagePipelineUsers
+   statement added by hand through the Console, same bootstrapping
+   limitation as every previous permission-widening this project has
+   hit.
+5. KMS decrypt gaps on both output buckets, discovered by trying to
+   verify the pipeline's own output. Neither key's policy had ever named
+   an identity capable of reading back what pipeline_lambda writes --
+   correctly, by original design, since no Downstream consumer or
+   Reviewer identity existed yet. Closed by adding thang-admin to
+   redacted-output specifically (justified: content already meant to be
+   safe for an external consumer is safe for the account's own trusted
+   operator) and creating reviewer_test as a genuine, separate identity
+   for review-artifacts (declined to extend thang-admin there --
+   collapsing "account administrator" and "has legitimate clinical
+   access to this patient" into one identity would undo the actual
+   access-control distinction this bucket exists to enforce).
+
+End-to-end proof, not just individually-passing pieces: the
+"occupational therapy department" test note (see the 2026-09-07,
+expanded 2026-09-17, ADDRESS false-positives entry) was uploaded
+through the real upload_backend role via STS assumption, triggered the Lambda
+automatically via the S3 event, and its review_queue entry was read back
+and correctly decrypted by reviewer_test -- the first genuine,
+non-manual proof that every boundary designed across this project holds
+simultaneously against real infrastructure, not just in isolation.
+
+## Phase 3 infrastructure: Terraform project and input-notes fully provisioned
+
+*2026-09-21.*
+
+Dedicated, separate Terraform state for this project -- not shared with
+portfolio-infra, matching the one-identity-one-purpose principle already
+applied to patient-deid. Local backend chosen deliberately over S3-backed
+remote state: one operator, one machine, right now -- locking, multi-machine
+access, and automatic version history all solve problems that don't exist
+yet (CI/CD and collaboration are Phase 4 territory). State file lives at
+%LOCALAPPDATA%\patient-deid-pipeline\terraform-state\, outside OneDrive's
+sync scope, via an explicit backend "local" { path = ... } block -- the
+default would otherwise write state into the same folder as the .tf source
+files, which live inside the OneDrive-synced repo.
+
+Provisioning identity kept separate from runtime identity: a new IAM user
+(terraform-patient-deid, PowerUserAccess) dedicated purely to running
+Terraform. Discovered necessary directly: patient-deid (scoped to
+comprehendmedical:DetectPHI only) correctly failed with AccessDenied the
+moment Terraform tried to use it to create an IAM role -- least privilege
+working exactly as designed, against the wrong identity for the job.
+PowerUserAccess itself excludes all iam:* actions by design (AWS's stated
+purpose: prevents a PowerUser creating broader permissions for themselves),
+so a narrow inline policy was added to terraform-patient-deid granting only
+role-lifecycle actions plus PassRole, scoped by ARN to
+patient-deid-pipeline-* -- manages every role this project creates,
+structurally incapable of touching patient-deid, terraform-portfolio, or
+anything unrelated.
+
+Pipeline Lambda uses an IAM role, not a user -- the upgrade flagged as the
+eventual target when patient-deid was first created. No long-lived
+credentials: Lambda's service assumes the role at invocation, temporary
+credentials expire on their own. Trust policy restricts assumption to
+lambda.amazonaws.com exclusively.
+
+input-notes KMS key: administrator/user split, not a single broad grant.
+First draft used the common root-principal "kms:*" idiom -- caught before
+applying that this would let terraform-patient-deid (via PowerUserAccess,
+which does not exclude kms: actions) decrypt the key, defeating the
+Lambda-only goal entirely. Replaced with two named statements:
+terraform-patient-deid gets management actions only, kms:Decrypt
+deliberately absent; pipeline_lambda's role gets exactly kms:Decrypt and
+kms:DescribeKey, nothing else -- matches AWS's own "key administrators" vs
+"key users" terminology precisely. Key rotation enabled (365-day default,
+all prior generations retained automatically, nothing ever becomes
+unreadable). Deletion window set to the maximum 30 days: full destruction
+makes every note encrypted under this key permanently unreadable, and
+there's no real cost to maximizing the window to notice and cancel an
+accidental or malicious deletion first.
+
+Accepted cost, worth stating rather than leaving implicit: without the
+root-principal statement, this key has no generic account-level rescue
+path if the two named grants above are ever misconfigured or accidentally
+removed -- AWS's own default key policy includes that root statement
+specifically to guard against this exact lockout scenario.
+terraform-patient-deid's own management permissions are the sole route to
+ever administering this key again; losing that identity's access would
+mean losing the ability to manage the key at all, not just losing decrypt
+capability. Judged acceptable here, since the alternative (broad decrypt
+exposure through an overly-permissive identity) was the worse of the two
+real risks -- but worth remembering if terraform-patient-deid's own
+permissions are ever restructured later.
+
+input-notes bucket: SSE-KMS referencing the key above,
+aws_s3_bucket_public_access_block applied unconditionally regardless of
+what any policy might otherwise permit. pipeline_lambda granted exactly
+one permission here -- s3:GetObject, scoped with the object-level ARN
+suffix (bucket-arn/*), not the bare bucket ARN, since S3 distinguishes
+bucket-level and object-level actions by ARN shape and the wrong shape
+silently matches nothing.
+
+Known, accepted gap: this bucket's identity-paradox limitation, named when
+first discussed -- the role that legitimately needs to decrypt and read it
+is the same identity a breach would most likely compromise, since PHI
+detection genuinely requires plaintext. No encryption scheme resolves
+this; the planned mitigation is a short-retention lifecycle policy, not
+yet implemented.
+
+
+## Phase 3.5 added — frontend was never part of the original scope
+
+*2026-09-20.* The original five-phase roadmap never included a user-facing
+interface. Surfaced when reviewing what "the Operator has a working
+interface" actually meant in practice — pipeline.py hardcodes its input
+path, so processing a new note required editing source code, not just
+running a command. Static frontend (S3 + CloudFront) plus a separate
+Upload API (API Gateway + Lambda), kept deliberately split per the
+same one-identity-one-purpose principle used throughout Phase 3.
+
 ## ADDRESS false positives on "[specialty] + [place noun]" phrases — accepted, not fixed
 
 *2026-09-07, expanded 2026-09-17.* Round 2 of FR-4's threshold corpus (60 no-PHI sentences) surfaced one false

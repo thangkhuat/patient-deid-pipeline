@@ -12,3 +12,14 @@ venv/
 
 # Local agent guidance - kept out of the shared repo.
 CLAUDE.md
+
+# Terraform state files and local configuration
+*.tfstate
+*.tfstate.backup
+.terraform/
+*.tfvars
+
+# AWS Lambda deployment packages
+lambda-package/
+upload-package/
+*.zip
