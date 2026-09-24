@@ -2,6 +2,86 @@
 
 Newest first. Each entry: decision, rationale, alternatives considered.
 
+## Frontend hosting (CloudFront + S3) built and CORS closed -- full
+## browser-to-pipeline chain verified
+
+*2026-09-24.*
+
+**Static hosting, same private-bucket discipline as every other bucket in
+this project.** patient-deid-frontend is never made public directly --
+public access block applied unconditionally, same as input_notes,
+redacted_output, and review_artifacts. CloudFront reaches it through
+Origin Access Control (OAC), AWS's current recommended mechanism, rather
+than opening the bucket to the world just because it happens to serve
+web pages instead of PHI data. The bucket policy grants s3:GetObject to
+cloudfront.amazonaws.com, scoped by an AWS:SourceArn condition naming
+this one specific distribution -- the third independent instance this
+session of the same "confused deputy" pattern already applied to the S3
+event trigger's aws_lambda_permission and the API Gateway invoke
+permission: a broad service principal narrowed to exactly one resource,
+not trusted at the category level.
+
+**Manual deployment gap, named rather than quietly worked around.** No
+identity in this project holds s3:PutObject on this bucket -- by design,
+since the bucket policy only ever grants CloudFront read access. The
+placeholder index.html was uploaded using thang-admin's broad
+credentials, the same identity this project's own earlier reasoning
+scoped specifically for day-to-day human console/CLI work. Workable for
+getting a placeholder live today, but worth being honest it doesn't
+match the narrowly-scoped-identity discipline applied everywhere else in
+this system. A real deployment pipeline would want its own dedicated,
+narrowly-scoped "frontend deployer" identity rather than a human's admin
+credentials standing in for it indefinitely -- not solved here,
+deliberately deferred as Phase 4 territory rather than fixed as a
+shortcut now.
+
+**CORS added to the existing aws_apigatewayv2_api.upload resource**, not
+a separate resource -- HTTP APIs configure CORS as a block directly on
+the API itself. All three fields deliberately narrowed, not left at
+permissive defaults: allow_origins names the exact CloudFront domain,
+not a wildcard; allow_methods is POST only, since this API has exactly
+one route; allow_headers is content-type only, the sole header
+upload_handler.py's actual code path ever sends or checks. Same
+narrow-scoping instinct already applied to every IAM policy and KMS key
+statement this session, applied here to browser-origin policy instead.
+
+**One real Terraform error along the way, worth recording precisely.**
+Adding the cors_configuration block was intended as an edit to the
+existing resource; a second, complete aws_apigatewayv2_api "upload"
+block was pasted in alongside it instead, producing "Duplicate resource
+... configuration." Fixed by merging cors_configuration into the
+original declaration and deleting the accidental second block entirely
+-- a copy-paste mechanics error, not a logic error, but worth recording
+since it's a distinct failure mode from anything hit earlier this
+session.
+
+**The actual proof CORS works, and why it needed a genuinely different
+test than anything used before:** Invoke-RestMethod, used to verify
+upload_backend's HTTP path a few entries back, has no concept of CORS at
+all -- it's a command-line client, not a browser, so it was structurally
+incapable of catching a CORS misconfiguration even if one existed.
+Verified instead with a real fetch() call, run from the browser's own
+DevTools console while the page was loaded from the actual CloudFront
+origin -- the only way to genuinely exercise the preflight OPTIONS
+request and origin check a real frontend would trigger. Returned the
+correct 202/message/id shape.
+
+**Full chain confirmed from that one genuine browser action**, not
+assumed from the API response alone: the resulting object appeared in
+input_notes (upload_backend's own write succeeded) and, separately, in
+redacted_output (confirming the S3 event still fired automatically and
+pipeline_lambda ran the complete detect-and-redact chain end to end).
+First time this entire system has been exercised by an actual webpage
+rather than a developer tool or a hand-typed command standing in for
+one.
+
+**What's still genuinely unbuilt, not to be confused with what's now
+proven:** index.html remains a single static placeholder line -- no
+form, no real JavaScript, nothing a person could actually use to submit
+a note yet. Everything verified today proves the underlying pipes work
+correctly; building real, usable frontend content is separate, still-
+open work.
+
 ## Frontend split from the Upload API: static site, not a combined backend service
 
 *2026-09-24 (retroactive -- the decision itself was reasoned through and made
