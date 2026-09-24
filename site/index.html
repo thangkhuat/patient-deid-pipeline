@@ -43,30 +43,139 @@
   .result.success { display: block; background: var(--success-bg); border: 1px solid var(--success-border); }
   .result.error { display: block; background: var(--error-bg); border: 1px solid var(--error-border); }
   .result code { background: rgba(0,0,0,0.06); padding: 1px 5px; border-radius: 4px; font-size: 0.85em; }
+  .logout-row { text-align: right; margin-bottom: 8px; }
+  .logout-row button { width: auto; margin: 0; padding: 6px 12px; font-size: 0.8rem; background: var(--border); color: var(--muted); }
+  .logout-row button:hover { background: #d1d5db; }
+  #loginScreen { display: none; text-align: center; padding: 20px 0; }
 </style>
 </head>
 <body>
   <div class="card">
-    <h1>Patient De-Identification Pipeline</h1>
-    <p class="subtitle">Submit clinical note text for automatic PHI redaction. Processing happens asynchronously -- this page confirms submission, not completion.</p>
-
-    <div class="file-row">
-      <label for="fileInput">Upload a .txt file, or paste text directly below</label>
-      <input type="file" id="fileInput" accept=".txt,text/plain">
+    <div id="loginScreen">
+      <h1>Patient De-Identification Pipeline</h1>
+      <p class="subtitle">Please log in to submit clinical notes for redaction.</p>
+      <button id="loginBtn" type="button">Log in</button>
     </div>
 
-    <textarea id="noteContent" placeholder="Paste or type clinical note text here..."></textarea>
-    <div class="meta-row" id="charCount">0 / 20,000 characters</div>
+    <div id="appScreen" style="display:none;">
+      <div class="logout-row"><button id="logoutBtn" type="button">Log out</button></div>
+      <h1>Patient De-Identification Pipeline</h1>
+      <p class="subtitle">Submit clinical note text for automatic PHI redaction. Processing happens asynchronously -- this page confirms submission, not completion.</p>
 
-    <button id="submitBtn" type="button">Submit for processing</button>
+      <div class="file-row">
+        <label for="fileInput">Upload a .txt file, or paste text directly below</label>
+        <input type="file" id="fileInput" accept=".txt,text/plain">
+      </div>
 
-    <div class="result" id="result"></div>
+      <textarea id="noteContent" placeholder="Paste or type clinical note text here..."></textarea>
+      <div class="meta-row" id="charCount">0 / 20,000 characters</div>
+
+      <button id="submitBtn" type="button">Submit for processing</button>
+
+      <div class="result" id="result"></div>
+    </div>
   </div>
 
 <script>
   const CHAR_LIMIT = 20000;
   const UPLOAD_URL = "https://s91h2b7zm0.execute-api.ap-southeast-2.amazonaws.com/upload";
+  const COGNITO_DOMAIN = "https://patient-deid-auth.auth.ap-southeast-2.amazoncognito.com";
+  const CLIENT_ID = "4bh30bntqhj8pho4ao9908ltir";
+  const REDIRECT_URI = "https://d2tno7uvqes2o4.cloudfront.net";
 
+  // --- PKCE helpers -------------------------------------------------
+  function base64UrlEncode(buffer) {
+    return btoa(String.fromCharCode(...new Uint8Array(buffer)))
+      .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  }
+  function generateCodeVerifier() {
+    const array = new Uint8Array(32);
+    crypto.getRandomValues(array);
+    return base64UrlEncode(array);
+  }
+  async function generateCodeChallenge(verifier) {
+    const data = new TextEncoder().encode(verifier);
+    const digest = await crypto.subtle.digest("SHA-256", data);
+    return base64UrlEncode(digest);
+  }
+
+  // --- Auth state -----------------------------------------------------
+  function getAccessToken() { return sessionStorage.getItem("access_token"); }
+  function setAccessToken(token) { sessionStorage.setItem("access_token", token); }
+  function clearAccessToken() { sessionStorage.removeItem("access_token"); }
+
+  function showApp() {
+    document.getElementById("loginScreen").style.display = "none";
+    document.getElementById("appScreen").style.display = "block";
+  }
+  function showLogin() {
+    document.getElementById("loginScreen").style.display = "block";
+    document.getElementById("appScreen").style.display = "none";
+  }
+
+  document.getElementById("loginBtn").addEventListener("click", async () => {
+    const verifier = generateCodeVerifier();
+    const challenge = await generateCodeChallenge(verifier);
+    sessionStorage.setItem("pkce_verifier", verifier);
+
+    const params = new URLSearchParams({
+      client_id: CLIENT_ID,
+      response_type: "code",
+      scope: "openid email",
+      redirect_uri: REDIRECT_URI,
+      code_challenge: challenge,
+      code_challenge_method: "S256",
+    });
+    window.location.href = `${COGNITO_DOMAIN}/login?${params}`;
+  });
+
+  document.getElementById("logoutBtn").addEventListener("click", () => {
+    clearAccessToken();
+    const params = new URLSearchParams({ client_id: CLIENT_ID, logout_uri: REDIRECT_URI });
+    window.location.href = `${COGNITO_DOMAIN}/logout?${params}`;
+  });
+
+  async function handleAuthCallback(code) {
+    const verifier = sessionStorage.getItem("pkce_verifier");
+    const body = new URLSearchParams({
+      grant_type: "authorization_code",
+      client_id: CLIENT_ID,
+      code: code,
+      redirect_uri: REDIRECT_URI,
+      code_verifier: verifier,
+    });
+
+    const response = await fetch(`${COGNITO_DOMAIN}/oauth2/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: body,
+    });
+
+    if (!response.ok) {
+      showLogin();
+      return;
+    }
+    const tokens = await response.json();
+    setAccessToken(tokens.access_token);
+    sessionStorage.removeItem("pkce_verifier");
+    window.history.replaceState({}, document.title, REDIRECT_URI);
+    showApp();
+  }
+
+  // --- Page load: figure out which screen to show ---------------------
+  (function init() {
+    const urlParams = new URLSearchParams(window.location.search);
+    const code = urlParams.get("code");
+    if (code) {
+      handleAuthCallback(code);
+    } else if (getAccessToken()) {
+      showApp();
+    } else {
+      showLogin();
+    }
+  })();
+
+  // --- Upload form logic (unchanged except the Authorization header) --
   const fileInput = document.getElementById("fileInput");
   const textarea = document.getElementById("noteContent");
   const charCount = document.getElementById("charCount");
@@ -86,16 +195,9 @@
   fileInput.addEventListener("change", () => {
     const file = fileInput.files[0];
     if (!file) return;
-
     const reader = new FileReader();
-    reader.onload = (e) => {
-      textarea.value = e.target.result;
-      updateCharCount();
-    };
-    reader.onerror = () => {
-      result.className = "result error";
-      result.textContent = "Could not read the selected file.";
-    };
+    reader.onload = (e) => { textarea.value = e.target.result; updateCharCount(); };
+    reader.onerror = () => { result.className = "result error"; result.textContent = "Could not read the selected file."; };
     reader.readAsText(file);
   });
 
@@ -111,8 +213,11 @@
     try {
       const response = await fetch(UPLOAD_URL, {
         method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ content })
+        headers: {
+          "content-type": "application/json",
+          "Authorization": `Bearer ${getAccessToken()}`,
+        },
+        body: JSON.stringify({ content }),
       });
       const data = await response.json();
 
@@ -122,6 +227,9 @@
         textarea.value = "";
         fileInput.value = "";
         updateCharCount();
+      } else if (response.status === 401) {
+        clearAccessToken();
+        showLogin();
       } else {
         result.className = "result error";
         result.textContent = data.error || "Submission failed.";
