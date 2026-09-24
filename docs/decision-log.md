@@ -2,6 +2,104 @@
 
 Newest first. Each entry: decision, rationale, alternatives considered.
 
+## Auth gap closed: Cognito Managed Login with PKCE replaces the earlier
+## shared-secret plan, full pipeline re-verified with real authentication
+
+*2026-09-25.*
+
+Supersedes the shared-secret Lambda authorizer design sketched a few
+messages before this thread -- reconsidered and abandoned before any
+code was written, on a specific argument: a shared secret cannot answer
+"who actually submitted this note," and in a hospital-adjacent context
+that's not a minor gap. Everyone using it would be indistinguishable
+from everyone else, and revoking one person's access would mean
+rotating it for all of them. This was also, on reflection, the first
+place in this entire build where "prove who you specifically are" would
+have been replaced by "prove you know a string" -- a real mismatch with
+every other identity in this system (Operator, Reviewer, Downstream
+consumer), which were all designed around specific, accountable access
+from the start.
+
+**Cognito User Pool, admin-provisioned accounts only.** Confirmed
+against AWS's own security guidance before building this:
+self-registration would let anyone on the internet create an account
+and sign in -- no more restrictive than no auth at all for this
+system's purposes. admin_create_user_config.allow_admin_create_user_only
+= true closes that off; every account is created deliberately, by an
+administrator, via admin-create-user.
+
+**TOTP MFA required from the start**, not added after the fact --
+mfa_configuration set before the pool held a single real account, since
+retrofitting MFA onto existing users later would mean disrupting
+already-active logins rather than making it the default from day one.
+TOTP chosen over SMS: no per-message cost, no phone-number requirement,
+and the more secure of Cognito's two mechanisms (SMS is documented as
+vulnerable to SIM-swapping).
+
+**App client has no secret** (generate_secret = false) -- this runs
+entirely in browser JavaScript, and a secret embedded there would be
+exactly the exposure already ruled out when the shared-secret plan was
+rejected. Authorization Code Grant with PKCE used specifically because
+of that: AWS's own guidance states plainly that public clients with no
+secret should use PKCE, not the bare authorization code flow. PKCE adds
+a locally-generated code_verifier (kept in sessionStorage, never sent
+over the network) and its hashed code_challenge (sent with the initial
+redirect); the token exchange must present the original verifier,
+proving the party completing the login is the same one that started it.
+
+**Access token, not ID token, sent to the API.** Confirmed against AWS's
+own documentation before implementation, specifically to avoid the
+"real login, still rejected" failure mode that sending the wrong token
+type would produce: HTTP API's JWT authorizer validates the access
+token's aud/client_id claim, not the ID token's.
+
+**JWT authorizer added to the existing aws_apigatewayv2_api.upload**,
+replacing authorization_type = NONE with JWT and the authorizer's id --
+an edit to the existing route resource, not a new one, following the
+same care already established after the CORS duplicate-resource
+mistake. Verified directly and deliberately: the exact same
+unauthenticated request that had succeeded on every previous test this
+session was retried immediately after this change and correctly
+returned 401 -- concrete proof the gap was closed, not just that a
+resource existed.
+
+**A second, genuinely new CORS gap surfaced by adding the Authorization
+header** -- worth recording as its own finding, since it's a distinct
+mechanism from the original CORS work. allow_headers only ever listed
+content-type, correctly, because nothing sent anything else at the
+time it was configured. Adding the Authorization header to the upload
+fetch() call meant the browser's preflight OPTIONS request now asked
+permission for a header the API's CORS policy never anticipated,
+producing a fetch() failure indistinguishable from a real network error
+-- the same "blocked before the request reaches the API" mechanism
+already learned, just triggered by a header that didn't exist in the
+system until this exact change. Fixed by adding "authorization"
+alongside "content-type" in allow_headers.
+
+sessionStorage used for the access token, not localStorage -- cleared
+automatically when the tab closes, and AWS's own guidance specifically
+flags localStorage as readable by any injected script (XSS exposure)
+for anything holding real tokens.
+
+**Known, deliberately bounded limitation:** no silent token refresh
+implemented. An expired access token (roughly one hour) surfaces as a
+401 on the next submit attempt, at which point the page clears the
+stored token and returns to the login screen rather than transparently
+using the refresh token in the background. A real, accepted scope
+decision, not an oversight -- refresh-token handling would have been a
+meaningful addition to an already large piece of work, worth its own
+focused pass rather than folded in here.
+
+**Full chain re-verified with real authentication in place, the same
+way as every previous milestone this session:** logged in through
+Managed Login, completed TOTP, submitted a note that scores below
+review_threshold, and confirmed matching reference IDs landed in both
+redacted-output and review-artifacts. Every layer built across this
+entire project -- detection, redaction, encryption, storage, the event
+trigger, the upload API, hosting, CORS, and now real, individually
+accountable authentication -- proven working together end to end, not
+just individually correct.
+
 ## Real frontend built and deployed; full pipeline verified end-to-end
 ## by an actual user through the actual UI
 

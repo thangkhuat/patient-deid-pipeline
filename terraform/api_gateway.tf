@@ -5,7 +5,7 @@ resource "aws_apigatewayv2_api" "upload" {
   cors_configuration {
     allow_origins = ["https://d2tno7uvqes2o4.cloudfront.net"]
     allow_methods = ["POST"]
-    allow_headers = ["content-type"]
+    allow_headers = ["content-type", "authorization"]
   }
 }
 
@@ -17,9 +17,11 @@ resource "aws_apigatewayv2_integration" "upload" {
 }
 
 resource "aws_apigatewayv2_route" "upload" {
-  api_id    = aws_apigatewayv2_api.upload.id
-  route_key = "POST /upload"
-  target    = "integrations/${aws_apigatewayv2_integration.upload.id}"
+  api_id             = aws_apigatewayv2_api.upload.id
+  route_key          = "POST /upload"
+  target             = "integrations/${aws_apigatewayv2_integration.upload.id}"
+  authorization_type = "JWT"
+  authorizer_id      = aws_apigatewayv2_authorizer.cognito.id
 }
 
 resource "aws_apigatewayv2_stage" "default" {
@@ -34,4 +36,16 @@ resource "aws_lambda_permission" "allow_apigateway_invoke" {
   function_name = aws_lambda_function.upload_backend.function_name
   principal     = "apigateway.amazonaws.com"
   source_arn    = "${aws_apigatewayv2_api.upload.execution_arn}/*/*"
+}
+
+resource "aws_apigatewayv2_authorizer" "cognito" {
+  api_id           = aws_apigatewayv2_api.upload.id
+  authorizer_type  = "JWT"
+  identity_sources = ["$request.header.Authorization"]
+  name             = "cognito-authorizer"
+
+  jwt_configuration {
+    audience = [aws_cognito_user_pool_client.frontend.id]
+    issuer   = "https://cognito-idp.ap-southeast-2.amazonaws.com/${aws_cognito_user_pool.operators.id}"
+  }
 }
