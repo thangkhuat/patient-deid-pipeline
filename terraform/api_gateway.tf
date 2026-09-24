@@ -1,6 +1,12 @@
 resource "aws_apigatewayv2_api" "upload" {
   name          = "patient-deid-upload-api"
   protocol_type = "HTTP"
+
+  cors_configuration {
+    allow_origins = ["https://d2tno7uvqes2o4.cloudfront.net"]
+    allow_methods = ["POST"]
+    allow_headers = ["content-type"]
+  }
 }
 
 resource "aws_apigatewayv2_integration" "upload" {
