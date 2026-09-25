@@ -11,6 +11,7 @@ import uuid
 import boto3
 
 INPUT_NOTES_BUCKET = os.environ["INPUT_NOTES_BUCKET"]
+MAX_NOTE_LENGTH = 20000  # Comprehend Medical's own single-document limit
 
 
 def handler(event, context):
@@ -24,6 +25,23 @@ def handler(event, context):
             "statusCode": 400,
             "headers": {"Content-Type": "application/json"},
             "body": json.dumps({"error": "Request body must be JSON with a 'content' field"}),
+        }
+
+    # Non-string content (int, null) previously reached note_text.encode()
+    # uncaught -- an AttributeError the caller saw as a raw 500. Empty or
+    # oversized content previously passed straight through to a 202, only
+    # to fail later inside pipeline_lambda with no way back to the caller.
+    if not isinstance(note_text, str) or not note_text.strip():
+        return {
+            "statusCode": 400,
+            "headers": {"Content-Type": "application/json"},
+            "body": json.dumps({"error": "'content' must be a non-empty string"}),
+        }
+    if len(note_text) > MAX_NOTE_LENGTH:
+        return {
+            "statusCode": 400,
+            "headers": {"Content-Type": "application/json"},
+            "body": json.dumps({"error": f"'content' must be {MAX_NOTE_LENGTH} characters or fewer"}),
         }
 
     # UUID, not the original filename or anything patient-derived -- same
