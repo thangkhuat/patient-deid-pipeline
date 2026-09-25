@@ -2,6 +2,129 @@
 
 Newest first. Each entry: decision, rationale, alternatives considered.
 
+## Reviewer web UI built: Cognito Groups close the authorization gap a
+## shared JWT check couldn't, review.html reuses review_cli.py's logic
+
+*2026-09-25.*
+
+Reopens a question deliberately settled against a webpage twice earlier
+this session -- worth recording why it flipped rather than letting the
+final answer look like the first one. The original reasoning (IAM
+credentials can't safely live in a public browser page) was never
+wrong; it just answered a narrower question than what was actually
+being asked. "Easier to access than the CLI" specifically meant no
+local setup at all -- which only a real backend-plus-Cognito system
+provides, the same shape already built for the Operator. Reusing that
+shape surfaced a genuine, new security gap worth treating as the actual
+reason this became a real, justified build rather than scope creep: a
+shared JWT authorizer only confirms "a valid, logged-in user of this
+pool" -- with nothing to stop any Operator who simply logged in to
+submit a note from also reaching Reviewer-only content.
+
+**Confirmed, before writing any Terraform, why the fix couldn't live at
+the API Gateway layer at all.** Cognito's cognito:groups claim is
+included in the access token by default, confirmed against AWS's own
+access-token documentation -- no extra configuration needed once a user
+is in a group. But HTTP API's native JWT authorizer, confirmed against
+a second source directly comparing REST and HTTP API authorizer types,
+only supports OAuth scope-based checks -- structurally incapable of
+inspecting an arbitrary claim like cognito:groups. The group check has
+to happen inside the backend Lambda itself, reading
+event["requestContext"]["authorizer"]["jwt"]["claims"] -- confirmed as
+the real, documented mechanism API Gateway uses to hand decoded claims
+to a Lambda integration, not a workaround.
+
+is_reviewer() written to tolerate a real, unresolved documentation
+ambiguity rather than guess: AWS's REST API authorizer is documented to
+flatten cognito:groups into a comma-separated string, and it's unclear
+from documentation whether HTTP API preserves the JSON array shape or
+does the same flattening. `"Reviewers" in claims.get("cognito:groups", "")`
+is correct either way -- Python's `in` performs list-membership and
+substring-containment identically, so the same one-line check works
+regardless of which serialization AWS actually uses here.
+
+**Cognito User Pool Group ("Reviewers"), not a second, parallel auth
+system.** The existing test account added via admin-add-user-to-group,
+same manual, administrator-driven pattern already established for
+account creation itself.
+
+**review_one() couldn't be reused as-is, and the reason is worth
+recording precisely.** It printed to stdout and returned None -- correct
+for a terminal, meaningless for a Lambda, which has no terminal a
+browser could ever see. Refactored into get_review_entries(), returning
+structured data instead of printing it; list_pending_reviews() similarly
+upgraded to return each entry's unencrypted metadata (type/score/action)
+rather than bare keys, once it was clear this needed to exist as real,
+structured data anyway. review_cli.py's own presentation layer (the
+print statements) moved into main(), the only place that actually needed
+formatting. review_backend.py now genuinely reuses both functions
+unchanged -- no duplicated fetch-or-decrypt logic anywhere.
+
+**review_backend.py's own IAM role and the review_artifacts KMS key's
+third statement mirror reviewer_test's existing access exactly, as a
+Lambda role instead of a personal IAM user** -- s3:ListBucket,
+s3:GetObject, kms:Decrypt, nothing more. Packaged with the same
+platform-specific cryptography wheel pipeline_lambda needed (this
+function imports report.py), not the plain-boto3-only zip that sufficed
+for upload_backend and auth_handler.
+
+**One Lambda serving two routes (GET /reviews, GET /reviews/{key}) via
+event["requestContext"]["routeKey"] dispatch**, rather than splitting
+into two separate functions the way pipeline_lambda and upload_backend
+are split. Deliberate: both routes share the identical
+authorization-and-data-access logic: confirm Reviewer membership, then
+read from the same bucket. Splitting would have meant duplicating that
+shared logic across two functions for no real gain.
+
+The API Gateway→review_backend invoke permission is this session's
+fifth independent instance of the same confused-deputy scoping pattern
+(S3→pipeline_lambda, S3→CloudFront, API Gateway→upload_backend,
+API Gateway→auth_handler, now API Gateway→review_backend) -- worth
+treating as confirmation this is a core, recurring AWS idiom rather than
+noting it as novel each time.
+
+**CORS needed updating a third time this session**, for the same
+underlying reason as the two times before it: the existing
+configuration only ever allowed exactly what had been sent up to that
+point. allow_methods gained GET (the config only listed POST, since
+that's all upload_backend ever needed); review.html's calls needed
+Authorization already added for index.html's upload flow, so that part
+carried over for free.
+
+**review.html duplicates index.html's entire PKCE login flow** --
+generateCodeVerifier, generateCodeChallenge, the token exchange, session
+storage. A real, acknowledged cost, not an oversight: with no shared JS
+module or build step in this project, there was no way to share this
+code between two static files without introducing tooling this project
+doesn't otherwise have. Worth revisiting if a third page is ever added.
+
+**Client-side group checking in review.html is explicitly a UI
+convenience, not the security boundary** -- decodeJwtPayload() reads
+cognito:groups purely to avoid showing an Operator a review UI that
+would fail anyway on the first real request. The actual enforcement is
+is_reviewer() running server-side, on every single call; nothing about
+the client-side check is trusted for anything.
+
+review.html's own callback URL (/review.html, not the bare root) had to
+be added to the Cognito app client's callback_urls and logout_urls
+alongside index.html's -- Cognito rejects any redirect target it wasn't
+explicitly told about in advance, confirmed by needing exactly this fix
+before the login flow would complete.
+
+**Cross-page navigation was missing entirely until named and fixed as
+its own small pass** -- neither page linked to the other; each was only
+reachable by someone who already knew its exact URL. Closed with a
+one-line footer link on each, placed inside the already-authenticated
+view specifically, not the login screen, so it's never offered before
+it would actually be useful.
+
+Full loop verified for real, the same way as every other milestone this
+session: logged in as the test account (now in the Reviewers group),
+loaded the pending-review list through the browser, opened a real
+flagged entry, and confirmed the decrypted content rendered correctly
+-- KMS, the Fernet key, and the group-authorization check all working
+together through the actual UI, not a terminal standing in for it.
+
 ## Auth gap closed: Cognito Managed Login with PKCE replaces the earlier
 ## shared-secret plan, full pipeline re-verified with real authentication
 

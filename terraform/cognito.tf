@@ -48,10 +48,23 @@ resource "aws_cognito_user_pool_client" "frontend" {
   allowed_oauth_scopes                 = ["openid", "email"]
   supported_identity_providers         = ["COGNITO"]
 
-  callback_urls = ["https://d2tno7uvqes2o4.cloudfront.net"]
-  logout_urls   = ["https://d2tno7uvqes2o4.cloudfront.net"]
+  callback_urls = [
+    "https://d2tno7uvqes2o4.cloudfront.net",
+    "https://d2tno7uvqes2o4.cloudfront.net/review.html",
+  ]
+  
+  logout_urls = [
+    "https://d2tno7uvqes2o4.cloudfront.net",
+    "https://d2tno7uvqes2o4.cloudfront.net/review.html",
+  ]
 
   explicit_auth_flows = ["ALLOW_REFRESH_TOKEN_AUTH", "ALLOW_USER_SRP_AUTH"]
+}
+
+resource "aws_cognito_user_group" "reviewers" {
+  name         = "Reviewers"
+  user_pool_id = aws_cognito_user_pool.operators.id
+  description  = "Users authorized to review flagged, low-confidence PHI entities"
 }
 
 output "cognito_login_url" {

@@ -117,6 +117,13 @@ resource "aws_kms_key" "review_artifacts" {
         Principal = { AWS = aws_iam_user.reviewer_test.arn }
         Action    = ["kms:Decrypt", "kms:DescribeKey"]
         Resource  = "*"
+      },
+      {
+        Sid       = "AllowReviewBackendDecrypt"
+        Effect    = "Allow"
+        Principal = { AWS = aws_iam_role.review_backend.arn }
+        Action    = ["kms:Decrypt", "kms:DescribeKey"]
+        Resource  = "*"
       }
     ]
   })

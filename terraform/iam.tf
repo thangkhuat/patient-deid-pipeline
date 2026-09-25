@@ -144,3 +144,49 @@ resource "aws_iam_role_policy" "upload_backend_logging" {
     ]
   })
 }
+
+resource "aws_iam_user_policy" "reviewer_test_list_review_artifacts" {
+  name = "list-review-artifacts"
+  user = aws_iam_user.reviewer_test.name
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      { Effect = "Allow", Action = "s3:ListBucket", Resource = aws_s3_bucket.review_artifacts.arn }
+    ]
+  })
+}
+
+# iam.tf, appended
+resource "aws_iam_role" "review_backend" {
+  name = "patient-deid-review-backend"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      { Effect = "Allow", Principal = { Service = "lambda.amazonaws.com" }, Action = "sts:AssumeRole" }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy" "review_backend_logging" {
+  name = "write-logs"
+  role = aws_iam_role.review_backend.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      { Effect = "Allow", Action = "logs:CreateLogGroup", Resource = "arn:aws:logs:ap-southeast-2:${data.aws_caller_identity.current.account_id}:*" },
+      { Effect = "Allow", Action = ["logs:CreateLogStream", "logs:PutLogEvents"], Resource = "arn:aws:logs:ap-southeast-2:${data.aws_caller_identity.current.account_id}:log-group:/aws/lambda/patient-deid-review-backend:*" }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy" "review_backend_read_review_artifacts" {
+  name = "read-review-artifacts"
+  role = aws_iam_role.review_backend.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      { Effect = "Allow", Action = "s3:ListBucket", Resource = aws_s3_bucket.review_artifacts.arn },
+      { Effect = "Allow", Action = "s3:GetObject", Resource = "${aws_s3_bucket.review_artifacts.arn}/*" }
+    ]
+  })
+}
