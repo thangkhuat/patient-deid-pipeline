@@ -21,6 +21,6 @@ jobs:
         with:
           role-to-assume: arn:aws:iam::471116065597:role/patient-deid-github-actions-frontend-deploy
           aws-region: ap-southeast-2
-      - run: aws s3 cp site/ s3://patient-deid-frontend/ --recursive
+      - run: aws s3 sync site/ s3://patient-deid-frontend/ --delete
       # Without this, CloudFront keeps serving cached copies for up to 24h.
       - run: aws cloudfront create-invalidation --distribution-id EDLP358TFVTK5 --paths "/*"
