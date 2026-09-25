@@ -19,3 +19,22 @@ jobs:
           python-version: "3.10"
       - run: pip install -r requirements-dev.txt
       - run: python -m pytest
+
+  deploy:
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::471116065597:role/patient-deid-github-actions-lambda-deploy
+          aws-region: ap-southeast-2
+      - run: zip -r lambda.zip src -x '*__pycache__*'
+      - run: |
+          for function in patient-deid-pipeline patient-deid-upload-backend patient-deid-review-backend; do
+            aws lambda update-function-code --function-name "$function" --zip-file fileb://lambda.zip
+          done

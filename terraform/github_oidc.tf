@@ -40,3 +40,48 @@ resource "aws_iam_role_policy" "github_actions_frontend_deploy_write" {
     ]
   })
 }
+
+resource "aws_iam_role" "github_actions_lambda_deploy" {
+  name = "patient-deid-github-actions-lambda-deploy"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect    = "Allow"
+        Principal = { Federated = data.aws_iam_openid_connect_provider.github_actions.arn }
+        Action    = "sts:AssumeRoleWithWebIdentity"
+        Condition = {
+          StringEquals = {
+            "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
+          }
+          StringLike = {
+            "token.actions.githubusercontent.com:sub" = [
+              "repo:thangkhuat/patient-deid-pipeline:ref:refs/heads/main",
+              "repo:thangkhuat@177017208/patient-deid-pipeline@1327731147:ref:refs/heads/main"
+            ]
+          }
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy" "github_actions_lambda_deploy_update_code" {
+  name = "update-lambda-code"
+  role = aws_iam_role.github_actions_lambda_deploy.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = "lambda:UpdateFunctionCode"
+        Resource = [
+          aws_lambda_function.pipeline.arn,
+          aws_lambda_function.upload_backend.arn,
+          aws_lambda_function.review_backend.arn,
+        ]
+      }
+    ]
+  })
+}
