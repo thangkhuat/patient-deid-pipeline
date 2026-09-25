@@ -54,3 +54,21 @@ resource "aws_lambda_function" "upload_backend" {
     }
   }
 }
+
+resource "aws_lambda_function" "review_backend" {
+  function_name = "patient-deid-review-backend"
+  role          = aws_iam_role.review_backend.arn
+  handler       = "src.deid.review_backend.handler"
+  runtime       = "python3.10"
+  timeout       = 15
+  memory_size   = 256
+
+  filename         = "${path.module}/../review_backend.zip"
+  source_code_hash = filebase64sha256("${path.module}/../review_backend.zip")
+
+  environment {
+    variables = {
+      PATIENT_DEID_ENCRYPTION_KEY = var.encryption_key
+    }
+  }
+}
