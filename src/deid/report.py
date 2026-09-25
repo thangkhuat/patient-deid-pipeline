@@ -12,16 +12,18 @@ See docs/decision-log.md for the reasoning behind this module's shape:
   without decrypting anything first. See decision-log.md.
 - Output written to %LOCALAPPDATA%, deliberately outside OneDrive's
   Known Folder Move sync scope (Desktop/Documents/Pictures).
-- Encryption key is read from an environment variable, never generated
-  by this module -- generating one here would silently orphan every
-  previously-encrypted record.
+- Encryption is direct KMS Encrypt/Decrypt, not a local secret. This
+  replaces Fernet entirely: access to decrypt is governed purely by the
+  caller's own AWS/Cognito identity against the review-artifacts key's
+  policy, closing the shared-secret distribution gap that made Fernet
+  only ever an interim measure.
 """
 
+import base64
 import json
 import os
 from pathlib import Path
 from datetime import datetime
-from cryptography.fernet import Fernet
 
 
 # Entities scoring below this are flagged into the review queue. Settled
@@ -44,68 +46,52 @@ def get_output_directory() -> Path:
     return output_dir
 
 
-def load_encryption_key() -> bytes:
-    """Read the encryption key from the environment.
-
-    Reads PATIENT_DEID_ENCRYPTION_KEY. Must NOT generate a key if the
-    variable is missing -- that would silently orphan every previously
-    -encrypted record with no way to recover them. Missing key is a
-    setup error and should fail loudly, not degrade quietly.
-
-    Returns:
-        The key as bytes, ready to pass to Fernet(key).
-
-    Raises:
-        EnvironmentError: the variable is unset. The message carries the
-        setx command from decision-log.md, so the failure tells the
-        operator exactly what to run rather than just what went wrong.
-    """
-    key = os.getenv("PATIENT_DEID_ENCRYPTION_KEY")
-    if key is None:
-        raise EnvironmentError("PATIENT_DEID_ENCRYPTION_KEY environment variable is not set. Please set it using the command: setx PATIENT_DEID_ENCRYPTION_KEY <your_key>")
-    return key.encode()
-
-
-def encrypt_flagged_content(text: str, key: bytes) -> str:
+def encrypt_flagged_content(text: str, kms_client, key_id: str) -> str:
     """Encrypt one piece of flagged text for inclusion in a report.
+
+    Direct KMS Encrypt call -- no local key material at all.
 
     Args:
         text: the actual flagged entity text (real PHI -- this is the
             sensitive value this whole module exists to protect).
-        key: the Fernet key from load_encryption_key().
+        kms_client: a boto3 KMS client (or test double).
+        key_id: the review-artifacts key's ARN.
 
     Returns:
-        Ciphertext as a string, ready to drop directly into a JSON
-        audit record's "content_encrypted" field. Fernet already emits
-        URL-safe base64, so a plain .decode() is all that stands between
-        its bytes and JSON -- no second encoding step is needed.
+        Base64-encoded ciphertext, ready to drop directly into a JSON
+        audit record's "content_encrypted" field. KMS's raw
+        CiphertextBlob is binary, not directly JSON-safe the way
+        Fernet's output was, hence the explicit encoding step.
     """
-    fernet = Fernet(key)
-    encrypted_bytes = fernet.encrypt(text.encode())
-    return encrypted_bytes.decode()
+    response = kms_client.encrypt(KeyId=key_id, Plaintext=text.encode())
+    return base64.b64encode(response["CiphertextBlob"]).decode()
 
 
-def decrypt_flagged_content(ciphertext: str, key: bytes) -> str:
+def decrypt_flagged_content(ciphertext: str, kms_client, key_id: str) -> str:
     """Decrypt one review_queue entry's content back to plaintext.
 
-    Mirror of encrypt_flagged_content() -- same key-as-parameter
-    reasoning: callable without touching the environment, and "where
-    the key comes from" stays someone else's job.
+    key_id is technically optional for a symmetric key -- KMS reads
+    which key encrypted the blob from its own embedded metadata -- but
+    specified anyway per AWS's stated best practice: makes decryption
+    fail explicitly against an unexpected key, rather than silently
+    trusting the blob's own claim.
 
     Args:
         ciphertext: a review_queue record's "content_encrypted" value.
-        key: the same Fernet key used to encrypt it.
+        kms_client: a boto3 KMS client (or test double).
+        key_id: the same key's ARN used to encrypt it.
 
     Returns:
         The original plaintext.
 
     Raises:
-        cryptography.fernet.InvalidToken: wrong key, or the ciphertext
-        has been tampered with or corrupted.
+        botocore.exceptions.ClientError: wrong key, the caller lacks
+        kms:Decrypt, or the ciphertext is not KMS ciphertext at all
+        (e.g. a pre-migration Fernet entry).
     """
-    fernet = Fernet(key)
-    decrypted_bytes = fernet.decrypt(ciphertext.encode())
-    return decrypted_bytes.decode()
+    ciphertext_blob = base64.b64decode(ciphertext)
+    response = kms_client.decrypt(KeyId=key_id, CiphertextBlob=ciphertext_blob)
+    return response["Plaintext"].decode()
 
 
 def identify_entities_for_review(entities: list[dict], review_threshold: float) -> list[dict]:
@@ -136,7 +122,7 @@ def identify_entities_for_review(entities: list[dict], review_threshold: float) 
 
 
 def build_report(redacted_text: str, audit_records: list[dict], entities: list[dict],
-                  key: bytes, min_score: float,
+                  kms_client, key_id: str, min_score: float,
                   review_threshold: float = REVIEW_THRESHOLD) -> dict:
     """Assemble the final report from two genuinely independent sources.
 
@@ -156,18 +142,18 @@ def build_report(redacted_text: str, audit_records: list[dict], entities: list[d
     decision-log.md. It answers what a reviewer needs before decrypting
     anything: was this left in the text, or merely over-redacted?
 
-    Deliberately takes `key` as a parameter rather than calling
-    load_encryption_key() internally -- same reasoning as detect_phi()
-    taking `client` as a parameter: testable without a real environment
-    variable set, and "where the key comes from" stays someone else's
-    job.
+    Deliberately takes kms_client and key_id as parameters -- same
+    reasoning as detect_phi() taking `client` as a parameter: testable
+    against a fake, and "where the client and key come from" stays the
+    caller's job.
 
     Args:
         redacted_text: redact()'s first return value, unmodified.
         audit_records: redact()'s second return value, unmodified.
         entities: the RAW entity list from get_all_entities() -- from
             BEFORE it was ever passed into redact(). Not audit_records.
-        key: from load_encryption_key().
+        kms_client: a boto3 KMS client (or test double).
+        key_id: the review-artifacts key's ARN.
         min_score: the same threshold redact() used, so each
             review_queue record's action can be independently verified
             rather than assumed to match.
@@ -180,7 +166,7 @@ def build_report(redacted_text: str, audit_records: list[dict], entities: list[d
     review_queue = []
     for entity in identify_entities_for_review(entities, review_threshold):
         action = "redacted" if entity["Score"] >= min_score else "flagged_low_confidence"
-        encrypted_content = encrypt_flagged_content(entity["Text"], key)
+        encrypted_content = encrypt_flagged_content(entity["Text"], kms_client, key_id)
         review_queue.append({
             "type": entity["Type"],
             "score": entity["Score"],

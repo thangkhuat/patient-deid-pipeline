@@ -1,22 +1,23 @@
 """Tests for review_backend.py and the review_cli.py functions it reuses.
 
-Offline: S3 is a fake client injected via monkeypatch, and the events are
-hand-built HTTP API (payload 2.0) shapes carrying only the fields the
-handler reads. The group check is the security boundary for Reviewer-only
-content, so its cases are covered for every serialization of
-cognito:groups the Lambda might receive.
+Offline: S3 and KMS are fake clients injected via monkeypatch, and the
+events are hand-built HTTP API (payload 2.0) shapes carrying only the
+fields the handler reads. The group check is the security boundary for
+Reviewer-only content, so its cases are covered for every serialization
+of cognito:groups the Lambda might receive.
 """
 import io
 import json
 
 import pytest
 from botocore.exceptions import ClientError
-from cryptography.fernet import Fernet
 
 from src.deid import review_backend
 from src.deid.report import encrypt_flagged_content
 from src.deid.review_backend import handler, is_reviewer, parse_groups
 from src.deid.review_cli import get_review_entries, list_pending_reviews
+
+TEST_KEY_ID = "arn:aws:kms:ap-southeast-2:471116065597:key/test-key-id"
 
 
 class FakeS3:
@@ -41,6 +42,30 @@ class FakeS3:
         return {"Body": io.BytesIO(json.dumps(self.objects[Key]).encode())}
 
 
+class FakeKMS:
+    """In-memory stand-in for the two KMS calls report.py makes -- same
+    double as test_report.py's, duplicated rather than imported, since
+    test files shouldn't depend on each other.
+    """
+    def __init__(self):
+        self._store = {}
+        self._counter = 0
+
+    def encrypt(self, KeyId, Plaintext):
+        self._counter += 1
+        blob = f"fake-ciphertext-{self._counter}".encode()
+        self._store[blob] = (KeyId, Plaintext)
+        return {"CiphertextBlob": blob}
+
+    def decrypt(self, KeyId, CiphertextBlob):
+        if CiphertextBlob not in self._store:
+            raise ClientError({"Error": {"Code": "InvalidCiphertextException"}}, "Decrypt")
+        stored_key_id, plaintext = self._store[CiphertextBlob]
+        if stored_key_id != KeyId:
+            raise ClientError({"Error": {"Code": "IncorrectKeyException"}}, "Decrypt")
+        return {"Plaintext": plaintext}
+
+
 def make_event(route_key, groups, key=None):
     event = {
         "requestContext": {
@@ -56,27 +81,34 @@ def make_event(route_key, groups, key=None):
 
 
 @pytest.fixture
-def encryption_key(monkeypatch):
-    key = Fernet.generate_key()
-    monkeypatch.setenv("PATIENT_DEID_ENCRYPTION_KEY", key.decode())
-    return key
+def fake_kms():
+    return FakeKMS()
 
 
 @pytest.fixture
-def s3_objects(encryption_key):
+def s3_objects(fake_kms):
     return {
         "flagged.json": {"review_queue": [{
             "type": "NAME", "score": 0.3812, "action": "flagged_low_confidence",
-            "content_encrypted": encrypt_flagged_content("Zbigniew Wojcik", encryption_key),
+            "content_encrypted": encrypt_flagged_content("Zbigniew Wojcik", fake_kms, TEST_KEY_ID),
         }]},
         "clean.json": {"review_queue": []},
     }
 
 
 @pytest.fixture
-def fake_s3(monkeypatch, s3_objects):
+def fake_s3(monkeypatch, s3_objects, fake_kms):
     s3 = FakeS3(s3_objects)
-    monkeypatch.setattr(review_backend.boto3, "client", lambda service: s3)
+
+    def fake_boto3_client(service):
+        if service == "s3":
+            return s3
+        if service == "kms":
+            return fake_kms
+        raise ValueError(f"test never expected boto3.client({service!r})")
+
+    monkeypatch.setattr(review_backend.boto3, "client", fake_boto3_client)
+    monkeypatch.setenv("REVIEW_ARTIFACTS_KMS_KEY_ID", TEST_KEY_ID)
     return s3
 
 
@@ -158,11 +190,11 @@ def test_list_pending_reviews_skips_empty_queues(s3_objects):
     assert list(list_pending_reviews(FakeS3(s3_objects))) == ["flagged.json"]
 
 
-def test_list_pending_reviews_preserves_listing_order(encryption_key):
+def test_list_pending_reviews_preserves_listing_order():
     objects = {f"{i:03}.json": {"review_queue": [{"type": "NAME"}]} for i in range(40)}
     assert list(list_pending_reviews(FakeS3(objects))) == sorted(objects)
 
 
-def test_get_review_entries_decrypts_content(s3_objects, encryption_key):
-    entries = get_review_entries(FakeS3(s3_objects), "flagged.json", encryption_key)
+def test_get_review_entries_decrypts_content(s3_objects, fake_kms):
+    entries = get_review_entries(FakeS3(s3_objects), "flagged.json", fake_kms, TEST_KEY_ID)
     assert entries[0]["content"] == "Zbigniew Wojcik"
