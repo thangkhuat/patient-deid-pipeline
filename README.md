@@ -50,7 +50,7 @@ tracked in [`docs/decision-log.md`](docs/decision-log.md).
 ## Setup
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 aws configure  # if not already set up — needs Comprehend Medical access
 python -m src.deid.pipeline
 ```

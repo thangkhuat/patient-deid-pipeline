@@ -172,6 +172,14 @@ pass that tracks position rather than mutating the string in place.
   detectors see the same string, that API errors propagate rather than
   degrading to regex-only detection, and that the merged list closes the phone
   gap end to end through `redact()`. Not a re-test of either half.
+- Tests for the Lambda handlers (`lambda_handler.py`, `upload_handler.py`)
+  against fake S3/Comprehend Medical/KMS clients injected by patching
+  `boto3.client`, covering what each writes where and that no sample-note
+  identifier reaches either output bucket. Both modules read `os.environ` at
+  import time, so the tests import them fresh after setting the environment.
+- The offline suite must need no AWS credentials. A test that builds a real
+  botocore client passes explicit dummy credentials, so it can't pick up
+  whatever the machine's default profile is.
 - Known, unfixed leaks are pinned with `xfail(strict=True)` rather than
   omitted, so they stay visible in the suite.
 - An `xfail(strict=True)` may also pin *upstream API behaviour* that a higher
@@ -191,9 +199,22 @@ guessed scores turned out to be wrong — see `decision-log.md`.
 ### Running
 
 ```powershell
+py -3.10 -m pip install -r requirements-dev.txt
 py -3.10 -m pytest            # offline, free, deterministic
 py -3.10 -m pytest -m live    # opt-in; calls real AWS and bills the account
 ```
 
 `pytest.ini` sets `addopts = -m "not live"`, so live tests never run by
 accident.
+
+`requirements.txt` holds runtime dependencies only (boto3);
+`requirements-dev.txt` adds pytest.
+
+### CI
+
+`.github/workflows/test.yml` runs the offline suite on every push and pull
+request against `main` -- `python -m pytest` on Python 3.10, matching the
+Lambda runtime. It has no AWS credentials and no OIDC role, by design: if a
+test ever needs them to pass, that test isn't offline, and the fix belongs in
+the test. Invoked with `python -m` rather than bare `pytest`, because `-m` is
+what puts the repo root on `sys.path` for the `src.deid.*` imports.

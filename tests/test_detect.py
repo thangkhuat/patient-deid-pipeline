@@ -118,13 +118,24 @@ def test_empty_text_is_rejected_by_the_client():
     Uses a real botocore client rather than the fake, because this is a
     real constraint the fake does not model — an earlier version of this
     test asserted that empty text returned `[]`, which no real client
-    ever does. Makes no network call and needs no credentials: botocore
-    validates parameters before signing or sending anything.
+    ever does. Makes no network call: botocore validates parameters
+    before signing or sending anything.
+
+    The dummy credentials keep botocore off the local credential chain.
+    Without them, whatever the machine's default profile uses gets
+    resolved first -- e.g. an `aws login` session, which raises
+    MissingDependencyException when awscrt isn't installed -- and the
+    test fails for a reason unrelated to what it checks.
     """
     boto3 = pytest.importorskip("boto3")
     from botocore.exceptions import ParamValidationError
 
-    client = boto3.client("comprehendmedical", region_name="ap-southeast-2")
+    client = boto3.client(
+        "comprehendmedical",
+        region_name="ap-southeast-2",
+        aws_access_key_id="testing",
+        aws_secret_access_key="testing",
+    )
 
     with pytest.raises(ParamValidationError, match="min length: 1"):
         detect_phi(client, "")
