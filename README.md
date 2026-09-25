@@ -18,13 +18,15 @@ Full background: `docs/functional-requirements.md`.
 
 ## Status
 
-**Phase 2 (application) — in progress.** `detect_phi()`, `redact()` and
-`load_note()` are implemented and running end-to-end against live AWS
-Comprehend Medical, with detection now going through `get_all_entities()`,
-which merges Comprehend Medical with a regex backstop for Australian mobile
-numbers. The FR-4 confidence threshold is now settled at **0.001**, derived
-from a stated cost ratio and three rounds of corpus testing against the live
-API rather than guessed. Outstanding: the backstop closes the AU mobile
+**Phases 1–4 done; Phase 5 (security hardening) next.** The pipeline runs in
+AWS end to end: an Operator uploads a note through the Cognito-protected
+frontend, the Pipeline Lambda detects PHI with Comprehend Medical plus a regex
+backstop for Australian mobile numbers, and writes the redacted note and an
+encrypted review queue that Reviewers open in their own UI. The FR-4
+confidence threshold is settled at **0.001**, derived from a stated cost ratio
+and three rounds of corpus testing against the live API rather than guessed.
+CI runs the offline test suite on every push and PR, and deploys the Lambdas
+and the frontend from `main`. Outstanding: the backstop closes the AU mobile
 formats that were measured, not the US-centric detection bias underneath them,
 and Comprehend Medical's `ADDRESS` false positives on phrases like
 "physiotherapy department" are accepted as noise rather than fixed — all
@@ -38,7 +40,7 @@ tracked in [`docs/decision-log.md`](docs/decision-log.md).
 | 2. Application | Local `detect_phi()` + `redact()` proof of concept, no AWS infra | ✅ Done |
 | 3. Infrastructure | Terraform: S3, IAM, KMS, VPC | ✅ Done |
 | 3.5. Frontend / Operator UI (API Gateway upload endpoint, static site)| Not in original scope — added 2026-09-20 after discovering the CLI required source-code edits to process a new file, with no real operator-facing path | ✅ Done |
-| 4. CI/CD | Automated testing + deploy pipeline | 🔜 In progress |
+| 4. CI/CD | Automated testing + deploy pipeline: GitHub Actions runs the test suite on every push/PR, and deploys the Lambdas (after tests pass) and the frontend from `main` via OIDC — no stored AWS keys | ✅ Done |
 | 5. Security hardening | Least-privilege IAM, audit logging | Not started |
 
 ## Docs
@@ -62,6 +64,20 @@ python -m pytest            # offline and free
 python -m pytest -m live    # opt-in; calls real AWS
 ```
 
+## Deployment
+
+| What | How | When |
+|---|---|---|
+| Tests | `.github/workflows/test.yml`, `test` job | Every push and PR to `main` |
+| Lambda code (all three functions) | `test.yml`, `deploy` job — one zip of `src/`, `update-function-code` + wait | Push to `main`, only after tests pass |
+| Frontend (`site/`) | `.github/workflows/deploy-frontend.yml` — `s3 sync --delete` + CloudFront invalidation | Push to `main` touching `site/**`, or run manually |
+| Infrastructure | `terraform plan` / `apply`, run by a person | By hand, never from CI |
+
+Terraform no longer deploys Lambda code: `source_code_hash` is ignored, so a
+later `apply` can't overwrite what CI shipped. To deploy code by hand, use
+`aws lambda update-function-code`. See `docs/decision-log.md`, "Phase 4
+closed".
+
 ## Data
 
 `tests/fixtures/` contains synthetic clinical notes only. No real PHI has
@@ -83,10 +99,9 @@ flowchart TD
     classDef built fill:#d4edda,stroke:#28a745,color:#000
     classDef planned fill:#f8f9fa,stroke:#6c757d,stroke-dasharray: 5 5,color:#000
 
-    class InputBucket built
-    class UploadBackend,Lambda,Comprehend,RedactedBucket,ReviewBucket planned
+    class InputBucket,UploadBackend,Lambda,Comprehend,RedactedBucket,ReviewBucket built
 ```
 
-Green, solid — actually provisioned in AWS via Terraform. Gray, dashed —
-designed and decided, not yet built. See `docs/decision-log.md` for the
-reasoning behind each piece.
+Everything shown is provisioned in AWS via Terraform (Comprehend Medical is
+the managed service it calls). See `docs/decision-log.md` for the reasoning
+behind each piece.

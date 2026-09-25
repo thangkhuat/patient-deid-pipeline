@@ -2,6 +2,201 @@
 
 Newest first. Each entry: decision, rationale, alternatives considered.
 
+## Phase 4 closed: Lambda code deploys from CI, gated on tests, through
+## a third OIDC role
+
+*2026-09-26.*
+
+With this, both halves of the CI/CD phase are in place: the offline test
+suite runs on every push and PR to main, and every deployable artifact
+ships from CI -- the frontend via deploy-frontend.yml, all three Lambdas
+via a new deploy job in test.yml. Terraform stays a human-run, human-
+approved step for infrastructure; it no longer ships Lambda code at all.
+
+**A second job in test.yml, not a new workflow file.** `needs:` only
+works between jobs in the same workflow, and gating on tests was the
+point: deploy runs only if the test job passed, only when github.ref is
+refs/heads/main, and only on a push event. Deliberately stricter than
+deploy-frontend.yml, which doesn't wait for tests at all -- a broken
+Lambda breaks the PHI pipeline itself; a broken page breaks a page.
+
+Honest note on that third condition, since the reasoning first given for
+it was wrong: `github.event_name == 'push'` was meant to stop a manual
+re-run of the test job from also deploying. It doesn't -- a re-run keeps
+the original run's event, and re-running a job re-runs the jobs that
+depend on it. With only push and pull_request as triggers, it's
+currently redundant with the ref check (PR runs carry refs/pull/N/merge).
+Kept anyway: it becomes the check that matters if workflow_dispatch is
+ever added, since a manual run from main has ref refs/heads/main but
+event workflow_dispatch.
+
+**A separate role, patient-deid-github-actions-lambda-deploy, not the
+frontend role widened.** Same trust policy shape (same OIDC provider
+data source, aud sts.amazonaws.com, sub restricted to this repo's main,
+name-based and ID-pinned), different and narrower job: only
+lambda:UpdateFunctionCode and lambda:GetFunctionConfiguration, on the
+three function ARNs via Terraform references. One identity, one
+purpose, as everywhere else in this project -- and the stakes justify
+it: this role can replace code that runs under roles with S3 access to
+PHI-holding buckets and KMS decrypt.
+
+**One shared zip for all three functions.** Checked before relying on
+it: the three handlers' full import tree is the standard library plus
+boto3/botocore, which the Lambda runtime provides -- no third-party
+package since the KMS migration removed cryptography -- and the three
+hand-built packages each contained only src/. If a handler ever needs a
+real dependency, this becomes per-function builds.
+
+**ignore_changes = [source_code_hash] on all three functions -- a real
+tradeoff, accepted.** Without it, the next terraform apply for anything
+at all would see the live code's hash differ from the local zip and push
+the local zip back over CI's deploy. The cost: rebuilding a local zip
+and running terraform apply no longer deploys code -- it's a silent
+no-op for code now. The manual path is aws lambda update-function-code
+directly. The local zips still have to exist, because filebase64sha256
+is still evaluated at plan time.
+
+**`aws lambda wait function-updated` after each update, not the -v2
+waiter.** update-function-code returns once AWS accepts the upload, not
+once the code is live, so without a wait the job could go green on a
+deploy that later failed. Both waiters succeed on LastUpdateStatus
+Successful and fail on Failed; the difference is what they poll.
+Checked against botocore's own waiter model: -v2 polls GetFunction,
+which would have needed a broader grant (it also returns a download URL
+for the function's code); the original polls GetFunctionConfiguration.
+Granting that one action and using the matching waiter was the narrower
+choice. Worth recording because the first spec paired the -v2 waiter
+with the GetFunctionConfiguration grant -- that would have failed every
+deploy with AccessDenied after the code had already been updated.
+
+**Actions pinned to the same commit SHAs as deploy-frontend.yml** --
+checkout and configure-aws-credentials, in both jobs. setup-python stays
+on @v5: there was no existing pin to copy, and it only runs in the test
+job, which holds no credentials.
+
+**Known gap, left deliberately: no all-or-nothing deploy.** Runner bash
+uses -e, so the loop stops at the first failed function; the ones before
+it are updated, the ones after aren't. That matters because the pipeline
+and review_backend share report.py's review_queue format. Recovery is
+"Re-run failed jobs", which redeploys all three from the same commit.
+Real atomicity needs published versions and aliases -- more machinery
+than a three-function, single-maintainer project needs today.
+
+Verified for real on the merge of this change (Actions run 36116534748):
+test job passed; deploy job passed every step, 09:06:14-09:06:32 UTC,
+including all three waits. Checked afterward against AWS directly, not
+just the job log: all three functions show LastUpdateStatus Successful,
+LastModified 09:06:23 / 09:06:25 / 09:06:28 UTC, and an identical
+CodeSha256 -- the one shared package, confirmed in all three places. The
+role and policy existing is confirmed by the job assuming and using
+them. That first deploy also shipped the upload validation entry below,
+which until then was merged but not live.
+
+Not yet verified: a functional check after the deploy (a note submitted
+through the frontend, a review opened in the review UI). And whether
+the ignore_changes blocks are live in Terraform state -- the next
+terraform plan should show no code change on the three functions, which
+is the check.
+
+Phase 4 as a whole: deploy-frontend.yml's first real run (a manual
+workflow_dispatch from main, run 36112205515) also passed, closing the
+"not yet verified" note on the GitHub Actions / OIDC entry below.
+
+## Upload handler rejects notes the pipeline can't process, at upload
+## time rather than downstream
+
+*2026-09-26.*
+
+upload_handler now returns 400 for three kinds of content it used to
+accept: non-strings (int, null, list -- previously an uncaught
+AttributeError the caller saw as a 500), empty or whitespace-only text,
+and text over 20,000 characters. Maps to FR-1 (accept a plaintext
+clinical note as input): this is the input contract made explicit.
+
+**Why at upload, not in pipeline_lambda.** The upload response is the
+only thing the Operator ever sees. pipeline_lambda runs asynchronously
+off an S3 event, so a note it can't process -- DetectPHI rejects empty
+text and anything over its limit -- used to fail there after the caller
+had already been told 202 Accepted, with no path back to tell them.
+
+**The limit is AWS's, not ours, and a test holds it to AWS's number.**
+20,000 is DetectPHI's Text limit; botocore's service model states it
+(min 1, max 20000), and both it and the handler count characters, not
+bytes. A test compares MAX_NOTE_LENGTH against botocore's model directly,
+so an AWS-side change picked up by a boto3 upgrade fails the build rather
+than drifting silently. It also matches the frontend's CHAR_LIMIT; the
+browser counts some characters (e.g. emoji) as two, so it is the stricter
+of the two and nothing it allows gets rejected here.
+
+**Whitespace-only rejected too** -- stricter than DetectPHI itself, which
+would accept "   ". There is nothing to redact in it, and the frontend
+doesn't trim before sending.
+
+No frontend change needed: index.html already shows the error message on
+any non-2xx response.
+
+Shipped as its own PR, not folded into the CI-tests one, since it changes
+production behaviour and the CI PR had been scoped to tests and workflow
+only. Tests: eleven new cases -- each rejected type, blank content, the
+exact boundary (20,000 accepted, 20,001 rejected), and the botocore
+cross-check -- all confirmed to fail against the previous handler. CI
+passed on the PR (run 36114879607); went live with the first CI Lambda
+deploy (entry above). Not yet exercised against the live endpoint with
+an actual bad request.
+
+## Offline test suite runs in CI on every push and PR to main
+
+*2026-09-26.*
+
+.github/workflows/test.yml runs `python -m pytest` on Python 3.10 --
+the Lambda runtime's version -- on every push and pull request against
+main, with no paths filter: the point is catching regressions broadly,
+docs and Terraform changes included. No AWS credentials and no OIDC
+role in the test job, by design: the suite was already fully offline
+(fake S3/KMS/Comprehend clients; live tests deselected by pytest.ini),
+and a test that needed credentials to pass would be the thing to fix,
+not something to work around. The job's token is `contents: read` only.
+
+**`python -m pytest`, not bare `pytest`** -- verified, not assumed. In a
+clean venv, bare `pytest` failed to collect every test file with
+"No module named 'src'": there is no conftest.py and no pythonpath
+setting, and it's `-m` that puts the repo root on sys.path. Same reason
+CLAUDE.md already gave for running everything with `-m` locally.
+
+**requirements.txt split in two.** requirements.txt is runtime-only
+(boto3>=1.34); requirements-dev.txt adds pytest>=8.0 on top. The
+existing version floors were kept rather than dropped to bare names.
+README and technical-requirements.md now install from
+requirements-dev.txt.
+
+**A real incident this surfaced: one "offline" test wasn't.**
+test_empty_text_is_rejected_by_the_client builds a real botocore client
+to prove DetectPHI rejects empty text before any network call. Passed in
+CI's clean environment; failed locally once the default AWS profile had
+moved to `aws login` -- botocore resolved credentials first, hit the
+login_session provider, and raised MissingDependencyException (awscrt
+not installed) before reaching the check under test. Its docstring said
+"needs no credentials"; it was reading the machine's default profile.
+Fixed by passing explicit dummy credentials, so the test is independent
+of whatever the local profile is. Recorded as a testing requirement in
+technical-requirements.md.
+
+**Tests added for the two handlers that had none.** lambda_handler.py --
+the production path -- had no tests at all, and upload_handler.py
+neither. Both read os.environ at import time, so the tests set the
+environment first and import them fresh. Checked that they can actually
+fail: temporarily routing lambda_handler through detect_phi() instead of
+get_all_entities() (dropping the phone backstop) initially broke only
+one test. The "no identifier survives" check was looking for the full
+number, and a truncated span leaves "[ID] 678", which doesn't contain
+it. Tightened to check the surviving digits too, the same way
+test_resolve_entities.py does; after that, two tests caught it.
+
+Verified: first CI run on the PR passed (run 36114860170) with 112
+passed, 2 xfailed (the expected strict ones), 1 deselected (live). The
+same result locally in a clean venv with all AWS config hidden, and with
+the normal local environment.
+
 ## sync --delete adopted for frontend deploys, closing the DeleteObject
 ## gap named at merge time
 
