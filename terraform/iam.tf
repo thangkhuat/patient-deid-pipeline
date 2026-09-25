@@ -111,7 +111,7 @@ resource "aws_iam_role_policy" "pipeline_lambda_detect_phi" {
 }
 
 resource "aws_iam_user" "reviewer_test" {
-  name = "patient-deid-reviewer-test"
+  name = "patient-deid-reviewer-cli"
 }
 
 resource "aws_iam_user_policy" "reviewer_test_read_review_artifacts" {

@@ -2,6 +2,71 @@
 
 Newest first. Each entry: decision, rationale, alternatives considered.
 
+## reviewer_test renamed to patient-deid-reviewer-cli -- clarifying its
+## real role, not retiring it
+
+*2026-09-25.*
+
+Closes an ambiguity that had quietly persisted since review_cli.py and
+the Cognito Reviewers group were both built: two separate identities
+existed for what looked like the same job, with no decision ever made
+about how they relate. Resolved by deciding plainly: any real human
+Reviewer is provisioned through Cognito going forward, exclusively --
+they would never need an AWS account at all, the same reasoning that
+already put the Operator side behind Cognito rather than a shared
+secret. reviewer_test was never actually a parallel onboarding path for
+real people; it's the credential behind review_cli.py, an operator/
+debugging tool for whoever runs this system, unrelated to how real
+Reviewers get set up. Renamed to reflect that -- patient-deid-reviewer-cli
+-- rather than a name suggesting it was ever a test version of the real
+thing.
+
+**"Operator" was deliberately avoided as a replacement name**, despite
+being the more obvious fit for "the person running this system" --
+FR-3/FR-10 already define Operator as the note-submitting role, a
+completely different identity. Reusing the term here would have
+recreated the exact ambiguity this rename exists to remove.
+
+**The actual rename mechanics, worth recording precisely since the
+first attempt to describe them was wrong on two counts, both corrected
+against real evidence before executing:**
+
+- Initially believed the KMS key policy's principal statement (naming
+  this identity by ARN) would need manual editing, and that a fresh
+  access key would be required. Both wrong. Confirmed against AWS's own
+  IAM documentation: a user's unique ID never changes on rename, and any
+  policy referencing the user as a principal (exactly what the KMS
+  statement does) updates itself automatically. Access keys are tied to
+  that unchanged unique ID, not the name string, so the existing key
+  pair -- and the reviewer-test local AWS CLI profile built on it --
+  kept working without any regeneration.
+- Confirmed directly against a real terraform plan output for the exact
+  same scenario (renaming an aws_iam_user's name attribute) before
+  trusting it: Terraform performs a genuine in-place update via AWS's
+  UpdateUser API, not a destroy-and-recreate. The Terraform resource's
+  own internal address (aws_iam_user.reviewer_test) was deliberately
+  left unchanged -- only the name attribute's value changed -- since
+  renaming the address itself would have forced Terraform to treat it
+  as an entirely different resource.
+- The two inline aws_iam_user_policy resources attached to this identity
+  did NOT follow the rename smoothly, despite depending on
+  aws_iam_user.reviewer_test.name via a direct reference. Terraform's
+  plan showed both as "must be replaced," not updated in place --
+  because this resource type's composite ID is built from
+  {username}:{policy-name} concatenated together; changing the username
+  changes that whole ID, which this specific resource type treats as
+  force-new. A real, distinct mechanism from aws_iam_user's own
+  in-place-updatable name, not the same behavior propagating through a
+  dependency as first assumed. Judged acceptable regardless: both
+  policies get destroyed and immediately recreated with identical
+  content within the same apply, and this identity serves no live
+  production traffic that could be affected by the brief gap.
+
+Verified for real afterward, not just trusted from the plan output:
+`review_cli.py --list --profile reviewer-test` against the renamed
+identity correctly listed and decrypted a real flagged entity,
+confirming both permissions and access keys survived the rename intact.
+
 ## Fernet retired, direct KMS Encrypt/Decrypt takes over -- the
 ## long-deferred "real target" finally built, with several real
 ## incidents along the way
