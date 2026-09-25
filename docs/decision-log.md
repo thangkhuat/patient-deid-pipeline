@@ -2,6 +2,147 @@
 
 Newest first. Each entry: decision, rationale, alternatives considered.
 
+## Fernet retired, direct KMS Encrypt/Decrypt takes over -- the
+## long-deferred "real target" finally built, with several real
+## incidents along the way
+
+*2026-09-25.*
+
+Triggered by the Fernet key distribution gap becoming concrete a second
+time: review_backend.py needed the exact same PATIENT_DEID_ENCRYPTION_KEY
+pipeline_lambda already held, with still no real way for a genuine
+Reviewer on a different machine to obtain it. Deferred since the
+encryption design was first written; this is the migration that closes
+it for good.
+
+**Direct KMS Encrypt/Decrypt chosen over envelope encryption**, the two
+paths this project has held open since the original design. Both close
+the distribution gap equally -- decrypt access becomes purely "does this
+caller's own identity have kms:Decrypt on this key," never a shared
+secret again. Direct calls won on everything else: zero schema change
+(content_encrypted stays exactly the field it already was, just holding
+a different kind of string), and -- the concrete win -- cryptography
+drops out of pipeline_lambda's and review_backend's dependencies
+entirely, letting both return to the same plain boto3-only zip packaging
+upload_backend and auth_handler always used. No more platform-specific
+wheel installs for either.
+
+Two API details confirmed against AWS's own documentation before writing
+any code: decrypt()'s KeyId is technically optional for a symmetric key
+(KMS reads which key encrypted a ciphertext from its own embedded
+metadata) but specified anyway, per AWS's stated best practice, so a
+decrypt against an unexpected key fails explicitly rather than silently
+trusting the blob's own claim. And CiphertextBlob is raw binary, not
+directly JSON-safe the way Fernet's own output always was -- needed an
+explicit base64 encode/decode step Fernet never required.
+
+load_encryption_key() deleted outright, not deprecated -- nothing calls
+it once every site is updated, and a dead function reading a variable
+nothing sets anymore is worse than removing it. encrypt_flagged_content(),
+decrypt_flagged_content(), and build_report() all changed from taking
+key: bytes to kms_client + key_id. Every call site updated to match:
+lambda_handler.py, review_cli.py, review_backend.py, and pipeline.py
+(see below -- initially missed).
+
+REVIEW_ARTIFACTS_KMS_KEY_ID supplied differently depending on the
+caller: an environment variable, Terraform-managed, for the two
+Lambdas; a hardcoded module constant in review_cli.py, which pipeline.py
+imports rather than duplicating -- both are genuinely local CLIs with no
+Terraform-managed environment to read from, matching review_cli.py's own
+existing pattern for REVIEW_ARTIFACTS_BUCKET. Terraform's two environment variables both use
+aws_kms_key.review_artifacts.arn specifically, not .key_id, so the
+Lambda-managed value and the two hardcoded local constants reference the
+key identically rather than risking a subtle format mismatch between
+them.
+
+variables.tf's encryption_key variable removed entirely, along with it
+the $env:TF_VAR_encryption_key step that had to be repeated before every
+single plan/apply this whole project -- the exact thing that caused an
+interrupted plan earlier this session when it was forgotten. Nothing
+references it anymore; there is nothing left to remember to set.
+
+**Six real incidents surfaced building and deploying this, worth
+recording precisely since each is a distinct, non-obvious failure
+mode:**
+
+1. All three Lambda zips were simply missing from disk on the first
+   terraform plan. Partly explained by the repomix snapshot used to
+   verify file state: its own header states binary files are never
+   included, so a missing zip was invisible in that review regardless of
+   whether it existed. All three needed a full, fresh build regardless,
+   since even a zip that did exist would have predated this migration's
+   code changes.
+2. review_backend.py's REVIEW_ARTIFACTS_KMS_KEY_ID was first written as
+   a module-level os.environ[...] read -- executed once at import time,
+   before any test fixture could monkeypatch it. The old
+   load_encryption_key() pattern had avoided this by reading lazily,
+   inside handler(), at the point of actual use. Fixed by moving the
+   read inside handler() the same way.
+3. The existing fake_s3 fixture unconditionally returned the fake S3
+   client regardless of which AWS service boto3.client() was asked for.
+   Needed updating to dispatch by service name, and to share one
+   FakeKMS instance between the fixture that encrypts test data and the
+   one handler() picks up internally -- otherwise a ciphertext created
+   in one fake KMS store wouldn't exist in the other.
+4. report.py's actual changes had never been saved to disk from an
+   earlier point in this session, despite having been given as code --
+   caught directly by test failures showing the old two-argument
+   signature was still live. Worth recording as its own class of
+   mistake: code given in conversation and code saved to disk are two
+   different claims, and this session's own discipline of verifying
+   actual file content before editing exists precisely because of
+   exactly this gap.
+5. pipeline.py -- the original local CLI entry point, genuinely separate
+   from lambda_handler.py -- was missed entirely in the first round of
+   call-site updates. Caught not by directly inspecting it first, but by
+   reasoning through test_pipeline.py's own docstring ("main() is not
+   tested here") and realizing that didn't matter: `from src.deid.pipeline
+   import load_note` still executes pipeline.py's entire module top level,
+   including its own broken import of the now-deleted
+   load_encryption_key, so the whole test file's collection would fail
+   regardless of what its own tests actually exercise.
+6. The zip rebuild that followed incident 4 happened before report.py's
+   fix was confirmed correct -- meaning pipeline_lambda.zip and
+   review_backend.zip were deployed carrying new handler code paired
+   with a still-broken report.py, a mismatch invisible at import time
+   and only surfacing when handler() actually tried to call
+   build_report() with arguments the bundled version didn't support.
+   Diagnosed by noticing both zips' deployed source_code_hash values
+   were identical to each other -- strong evidence both were built from
+   the same, at-that-time-still-broken source tree -- and confirmed by a
+   fresh rebuild producing a new, different, now-correct hash on both.
+
+**Genuine, still-open gap, deliberately not resolved here:** objects in
+review-artifacts encrypted before this migration are still Fernet
+ciphertext, not KMS. review_backend.py's new code would call KMS Decrypt
+against them and get a real, hard failure (InvalidCiphertextException),
+currently surfacing as an unhandled 500 -- the handler's exception
+handling only translates NoSuchKey specifically. Deliberately not
+migrated or specially handled; this project's test data has never been
+anything but disposable, so deleting the old entries is the leading
+option, but the actual call is still open.
+
+**Also still open, surfaced but not answered:** fixing pipeline.py's
+code revealed that patient-deid -- the original, tightly-scoped local
+runtime identity, holding only comprehendmedical:DetectPHI since the
+very start of this project -- has never been granted any KMS permission
+on review_artifacts' key. Running pipeline.py locally will fail with
+AccessDenied until this is deliberately decided one way or another; not
+resolved by default, consistent with this identity never having gained
+scope without an explicit decision behind it.
+
+**Final verification, the actual proof this works, not just that
+FakeKMS-backed tests pass:** a fresh note submitted through the real,
+deployed frontend was encrypted by pipeline_lambda's new KMS code and
+successfully decrypted back through review_backend's new KMS code, via
+the real, authenticated Reviewer UI -- confirmed only after the stale-zip
+incident above was caught and fixed. The full chain -- real Cognito
+login, real API Gateway, real Lambda execution, real KMS Encrypt and
+Decrypt calls against the real review-artifacts key -- proven working
+together, closing out the Fernet-to-KMS migration this project named as
+its real target from the very first day the encryption design was
+written.
+
 ## Reviewer web UI built: Cognito Groups close the authorization gap a
 ## shared JWT check couldn't, review.html reuses review_cli.py's logic
 

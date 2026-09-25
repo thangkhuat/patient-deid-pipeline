@@ -22,6 +22,8 @@ CLAUDE.md
 # AWS Lambda deployment packages
 lambda-package/
 upload-package/
+pipeline-package/
+review-backend-package/
 *.zip
 
 # Repomix 

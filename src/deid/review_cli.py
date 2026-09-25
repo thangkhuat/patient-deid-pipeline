@@ -5,9 +5,10 @@ unlike the Operator's public browser page, and reviewer_test's existing
 IAM/KMS access already provides real per-identity accountability with
 nothing new to build.
 
-Reuses load_encryption_key() and decrypt_flagged_content() from
-report.py directly -- this file is purely the missing interface around
-functions that already existed, tested, since several sessions back.
+Reuses decrypt_flagged_content() from report.py directly -- this file
+is purely the missing interface around a function that already existed,
+tested, since several sessions back. Encryption is direct KMS
+Encrypt/Decrypt, not a local secret -- see decision-log.md.
 """
 import argparse
 import json
@@ -15,24 +16,15 @@ from concurrent.futures import ThreadPoolExecutor
 
 import boto3
 
-from src.deid.report import load_encryption_key, decrypt_flagged_content
+from src.deid.report import decrypt_flagged_content
 
 REVIEW_ARTIFACTS_BUCKET = "patient-deid-review-artifacts"
+REVIEW_ARTIFACTS_KMS_KEY_ID = "arn:aws:kms:ap-southeast-2:471116065597:key/f703113a-99c3-43df-8823-7864e5a32234"
 MAX_CONCURRENT_FETCHES = 16
 
 
 def list_pending_reviews(s3_client) -> dict[str, list[dict]]:
-    """Find every object with a non-empty review_queue, returning each
-    entry's unencrypted metadata (type, score, action) alongside it --
-    no decryption performed here, since only content_encrypted is
-    actually encrypted.
-
-    The review queue lives inside each object's body, so this still
-    costs one GetObject per artifact; fetching them concurrently keeps
-    the wall-clock time inside review_backend's Lambda timeout as the
-    bucket grows. It does not reduce the number of calls -- that needs
-    an index or per-object metadata written by the pipeline.
-    """
+    """Unchanged."""
     paginator = s3_client.get_paginator("list_objects_v2")
     keys = [
         obj["Key"]
@@ -49,7 +41,7 @@ def list_pending_reviews(s3_client) -> dict[str, list[dict]]:
     return {key: queue for key, queue in zip(keys, queues) if queue}
 
 
-def get_review_entries(s3_client, key: str, encryption_key: bytes) -> list[dict]:
+def get_review_entries(s3_client, key: str, kms_client, key_id: str) -> list[dict]:
     """Fetch and decrypt one object's review_queue, returning structured
     data -- type, score, action, and the decrypted content -- for the
     caller to present however it needs to. Shared by both the CLI and
@@ -63,7 +55,7 @@ def get_review_entries(s3_client, key: str, encryption_key: bytes) -> list[dict]
             "type": entry["type"],
             "score": entry["score"],
             "action": entry["action"],
-            "content": decrypt_flagged_content(entry["content_encrypted"], encryption_key),
+            "content": decrypt_flagged_content(entry["content_encrypted"], kms_client, key_id),
         })
     return entries
 
@@ -77,6 +69,7 @@ def main():
 
     session = boto3.Session(profile_name=args.profile)
     s3 = session.client("s3")
+    kms = session.client("kms")
 
     if args.list:
         pending = list_pending_reviews(s3)
@@ -88,7 +81,7 @@ def main():
             for entry in entries:
                 print(f"    {entry['type']:<12} score={entry['score']:.4f}  action={entry['action']}")
     elif args.review:
-        for entry in get_review_entries(s3, args.review, load_encryption_key()):
+        for entry in get_review_entries(s3, args.review, kms, REVIEW_ARTIFACTS_KMS_KEY_ID):
             print(f"Type: {entry['type']}")
             print(f"Score: {entry['score']}")
             print(f"Action: {entry['action']}")

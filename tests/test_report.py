@@ -2,24 +2,55 @@
 
 See docs/decision-log.md for the design this module implements: two
 genuinely independent sources (redact()'s output, and the raw entity
-list for review-queue purposes), an encryption key that must never be
-silently generated, and output written outside OneDrive's sync scope.
+list for review-queue purposes), and direct KMS encryption -- access to
+decrypt is governed by the caller's own AWS identity against the key's
+policy, not a distributed shared secret.
 """
 
 import json
 
 import pytest
-from cryptography.fernet import Fernet, InvalidToken
+from botocore.exceptions import ClientError
 
 from src.deid.report import (
     get_output_directory,
-    load_encryption_key,
     encrypt_flagged_content,
     decrypt_flagged_content,
     identify_entities_for_review,
     build_report,
     write_report,
 )
+
+
+class FakeKMS:
+    """In-memory stand-in for the two KMS calls report.py makes.
+
+    Real enough to catch genuine bugs, not just approximate them:
+    encrypt() ties each ciphertext to the specific key_id it was
+    encrypted under, and decrypt() rejects a mismatched key_id --
+    mirroring KMS's own documented behavior (specifying KeyId makes
+    Decrypt fail if the ciphertext was encrypted under a different key).
+    """
+    def __init__(self):
+        self._store = {}
+        self._counter = 0
+
+    def encrypt(self, KeyId, Plaintext):
+        self._counter += 1
+        blob = f"fake-ciphertext-{self._counter}".encode()
+        self._store[blob] = (KeyId, Plaintext)
+        return {"CiphertextBlob": blob}
+
+    def decrypt(self, KeyId, CiphertextBlob):
+        if CiphertextBlob not in self._store:
+            raise ClientError({"Error": {"Code": "InvalidCiphertextException"}}, "Decrypt")
+        stored_key_id, plaintext = self._store[CiphertextBlob]
+        if stored_key_id != KeyId:
+            raise ClientError({"Error": {"Code": "IncorrectKeyException"}}, "Decrypt")
+        return {"Plaintext": plaintext}
+
+
+TEST_KEY_ID = "arn:aws:kms:ap-southeast-2:471116065597:key/test-key-id"
 
 
 # --- get_output_directory --------------------------------------------------
@@ -38,50 +69,36 @@ def test_output_directory_is_idempotent(tmp_path, monkeypatch):
     assert output_dir.exists()
 
 
-# --- load_encryption_key ----------------------------------------------------
-
-def test_load_encryption_key_reads_from_environment(monkeypatch):
-    real_key = Fernet.generate_key()
-    monkeypatch.setenv("PATIENT_DEID_ENCRYPTION_KEY", real_key.decode())
-    assert load_encryption_key() == real_key
-
-
-def test_load_encryption_key_raises_when_missing(monkeypatch):
-    monkeypatch.delenv("PATIENT_DEID_ENCRYPTION_KEY", raising=False)
-    with pytest.raises(EnvironmentError):
-        load_encryption_key()
-
-
 # --- encrypt_flagged_content -------------------------------------------
 
 def test_encrypt_flagged_content_round_trips():
-    key = Fernet.generate_key()
-    ciphertext = encrypt_flagged_content("Zbigniew Wojcik", key)
+    kms = FakeKMS()
+    ciphertext = encrypt_flagged_content("Zbigniew Wojcik", kms, TEST_KEY_ID)
     assert isinstance(ciphertext, str)
-    assert Fernet(key).decrypt(ciphertext.encode()).decode() == "Zbigniew Wojcik"
+    assert decrypt_flagged_content(ciphertext, kms, TEST_KEY_ID) == "Zbigniew Wojcik"
 
 
 def test_encrypt_flagged_content_does_not_return_plaintext():
-    key = Fernet.generate_key()
-    ciphertext = encrypt_flagged_content("Zbigniew Wojcik", key)
+    kms = FakeKMS()
+    ciphertext = encrypt_flagged_content("Zbigniew Wojcik", kms, TEST_KEY_ID)
     assert "Zbigniew Wojcik" not in ciphertext
 
 
 # --- decrypt_flagged_content -------------------------------------------
 
 def test_decrypt_flagged_content_round_trips():
-    key = Fernet.generate_key()
+    kms = FakeKMS()
     plaintext = "Zbigniew Wojcik"
-    ciphertext = encrypt_flagged_content(plaintext, key)
-    assert decrypt_flagged_content(ciphertext, key) == plaintext
+    ciphertext = encrypt_flagged_content(plaintext, kms, TEST_KEY_ID)
+    assert decrypt_flagged_content(ciphertext, kms, TEST_KEY_ID) == plaintext
 
 
 def test_decrypt_flagged_content_fails_loudly_on_wrong_key():
-    key = Fernet.generate_key()
-    wrong_key = Fernet.generate_key()
-    ciphertext = encrypt_flagged_content("occupational therapy department", key)
-    with pytest.raises(InvalidToken):
-        decrypt_flagged_content(ciphertext, wrong_key)
+    kms = FakeKMS()
+    ciphertext = encrypt_flagged_content("occupational therapy department", kms, TEST_KEY_ID)
+    wrong_key_id = "arn:aws:kms:ap-southeast-2:471116065597:key/some-other-key"
+    with pytest.raises(ClientError):
+        decrypt_flagged_content(ciphertext, kms, wrong_key_id)
 
 
 # --- identify_entities_for_review ---------------------------------------
@@ -107,22 +124,22 @@ def test_empty_entity_list_returns_empty_review_queue():
 # --- build_report -----------------------------------------------------
 
 def test_build_report_passes_through_redact_output_unchanged():
-    key = Fernet.generate_key()
+    kms = FakeKMS()
     redacted_text = "Patient [NAME]."
     audit_records = [{"type": "NAME", "score": 0.99, "action": "redacted"}]
-    report = build_report(redacted_text, audit_records, entities=[], key=key,
-                          min_score=0.001)
+    report = build_report(redacted_text, audit_records, entities=[],
+                          kms_client=kms, key_id=TEST_KEY_ID, min_score=0.001)
     assert report["redacted_text"] == redacted_text
     assert report["audit_records"] == audit_records
 
 
 def test_build_report_review_queue_contains_only_low_score_entities():
-    key = Fernet.generate_key()
+    kms = FakeKMS()
     entities = [
         {"Type": "NAME", "Score": 0.99, "Text": "John Smith"},
         {"Type": "ADDRESS", "Score": 0.70, "Text": "physiotherapy department"},
     ]
-    report = build_report("...", [], entities, key, min_score=0.001,
+    report = build_report("...", [], entities, kms, TEST_KEY_ID, min_score=0.001,
                           review_threshold=0.8)
     assert len(report["review_queue"]) == 1
     assert report["review_queue"][0]["type"] == "ADDRESS"
@@ -130,9 +147,9 @@ def test_build_report_review_queue_contains_only_low_score_entities():
 
 
 def test_build_report_review_queue_never_contains_plaintext():
-    key = Fernet.generate_key()
+    kms = FakeKMS()
     entities = [{"Type": "ADDRESS", "Score": 0.70, "Text": "physiotherapy department"}]
-    report = build_report("...", [], entities, key, min_score=0.001,
+    report = build_report("...", [], entities, kms, TEST_KEY_ID, min_score=0.001,
                           review_threshold=0.8)
     record = report["review_queue"][0]
     assert "text" not in record
@@ -140,18 +157,18 @@ def test_build_report_review_queue_never_contains_plaintext():
 
 
 def test_build_report_review_content_decrypts_to_original_text():
-    key = Fernet.generate_key()
+    kms = FakeKMS()
     entities = [{"Type": "ADDRESS", "Score": 0.70, "Text": "physiotherapy department"}]
-    report = build_report("...", [], entities, key, min_score=0.001,
+    report = build_report("...", [], entities, kms, TEST_KEY_ID, min_score=0.001,
                           review_threshold=0.8)
     ciphertext = report["review_queue"][0]["content_encrypted"]
-    assert Fernet(key).decrypt(ciphertext.encode()).decode() == "physiotherapy department"
+    assert decrypt_flagged_content(ciphertext, kms, TEST_KEY_ID) == "physiotherapy department"
 
 
 def test_review_record_carries_the_action_redact_took():
-    key = Fernet.generate_key()
+    kms = FakeKMS()
     entities = [{"Type": "ADDRESS", "Score": 0.70, "Text": "physiotherapy department"}]
-    report = build_report("...", [], entities, key, min_score=0.001,
+    report = build_report("...", [], entities, kms, TEST_KEY_ID, min_score=0.001,
                           review_threshold=0.8)
     assert report["review_queue"][0]["action"] == "redacted"
 
@@ -163,21 +180,21 @@ def test_action_splits_at_min_score_not_review_threshold():
     than at the project's own values -- the point is to characterise where
     the split falls, which a single threshold cannot show.
     """
-    key = Fernet.generate_key()
+    kms = FakeKMS()
     entities = [
         {"Type": "ADDRESS", "Score": 0.70, "Text": "physiotherapy department"},
         {"Type": "ADDRESS", "Score": 0.30, "Text": "interstate"},
     ]
-    report = build_report("...", [], entities, key, min_score=0.5,
+    report = build_report("...", [], entities, kms, TEST_KEY_ID, min_score=0.5,
                           review_threshold=0.8)
     actions = {r["score"]: r["action"] for r in report["review_queue"]}
     assert actions == {0.70: "redacted", 0.30: "flagged_low_confidence"}
 
 
 def test_score_exactly_at_min_score_counts_as_redacted():
-    key = Fernet.generate_key()
+    kms = FakeKMS()
     entities = [{"Type": "ADDRESS", "Score": 0.5, "Text": "physiotherapy department"}]
-    report = build_report("...", [], entities, key, min_score=0.5,
+    report = build_report("...", [], entities, kms, TEST_KEY_ID, min_score=0.5,
                           review_threshold=0.8)
     assert report["review_queue"][0]["action"] == "redacted"
 

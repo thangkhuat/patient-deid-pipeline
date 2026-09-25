@@ -11,9 +11,9 @@ resource "aws_lambda_function" "pipeline" {
 
   environment {
     variables = {
-      REDACTED_OUTPUT_BUCKET      = aws_s3_bucket.redacted_output.bucket
-      REVIEW_ARTIFACTS_BUCKET     = aws_s3_bucket.review_artifacts.bucket
-      PATIENT_DEID_ENCRYPTION_KEY = var.encryption_key
+      REDACTED_OUTPUT_BUCKET     = aws_s3_bucket.redacted_output.bucket
+      REVIEW_ARTIFACTS_BUCKET    = aws_s3_bucket.review_artifacts.bucket
+      REVIEW_ARTIFACTS_KMS_KEY_ID = aws_kms_key.review_artifacts.arn
     }
   }
 }
@@ -68,7 +68,7 @@ resource "aws_lambda_function" "review_backend" {
 
   environment {
     variables = {
-      PATIENT_DEID_ENCRYPTION_KEY = var.encryption_key
+      REVIEW_ARTIFACTS_KMS_KEY_ID = aws_kms_key.review_artifacts.arn
     }
   }
 }

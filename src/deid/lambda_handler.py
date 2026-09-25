@@ -6,18 +6,20 @@ import boto3
 
 from src.deid.resolve_entities import get_all_entities
 from src.deid.redact import redact
-from src.deid.report import build_report, load_encryption_key
+from src.deid.report import build_report
 
 MIN_SCORE = 0.001
 REVIEW_THRESHOLD = 0.8
 
 REDACTED_OUTPUT_BUCKET = os.environ["REDACTED_OUTPUT_BUCKET"]
 REVIEW_ARTIFACTS_BUCKET = os.environ["REVIEW_ARTIFACTS_BUCKET"]
+REVIEW_ARTIFACTS_KMS_KEY_ID = os.environ["REVIEW_ARTIFACTS_KMS_KEY_ID"]
 
 
 def handler(event, context):
     s3 = boto3.client("s3")
     comprehend_client = boto3.client("comprehendmedical")
+    kms_client = boto3.client("kms")
 
     record = event["Records"][0]["s3"]
     input_bucket = record["bucket"]["name"]
@@ -28,16 +30,12 @@ def handler(event, context):
     entities = get_all_entities(comprehend_client, note)
     redacted_text, audit_records = redact(note, entities, min_score=MIN_SCORE)
 
-    key = load_encryption_key()
-    report = build_report(redacted_text, audit_records, entities, key,
-                           min_score=MIN_SCORE, review_threshold=REVIEW_THRESHOLD)
+    report = build_report(redacted_text, audit_records, entities,
+                          kms_client, REVIEW_ARTIFACTS_KMS_KEY_ID,
+                          min_score=MIN_SCORE, review_threshold=REVIEW_THRESHOLD)
 
     output_key = input_key.rsplit(".", 1)[0] + ".json"
 
-    # The FR-7 artifact split, implemented for real here -- build_report()
-    # itself stays unchanged, one combined dict; this is where it actually
-    # gets physically separated into two objects, in two buckets, so no
-    # single file ever carries both redacted_text and review_queue together.
     s3.put_object(
         Bucket=REDACTED_OUTPUT_BUCKET,
         Key=output_key,

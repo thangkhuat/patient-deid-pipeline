@@ -13,11 +13,11 @@ answer the second, narrower question: "is this specific logged-in user
 a Reviewer."
 """
 import json
+import os
 
 import boto3
 from botocore.exceptions import ClientError
 
-from src.deid.report import load_encryption_key
 from src.deid.review_cli import list_pending_reviews, get_review_entries
 
 REVIEWER_GROUP = "Reviewers"
@@ -38,8 +38,6 @@ def parse_groups(raw) -> list[str]:
 
 
 def is_reviewer(claims: dict) -> bool:
-    # Exact membership, not substring: "Reviewers" in "ReviewersPending"
-    # is True for a string, which would grant access to the wrong group.
     return REVIEWER_GROUP in parse_groups(claims.get("cognito:groups", ""))
 
 
@@ -60,8 +58,15 @@ def handler(event, context):
 
     if route_key == "GET /reviews/{key}":
         key = event["pathParameters"]["key"]
+        kms = boto3.client("kms")
+        # Read lazily, not at module level -- a module-level os.environ[...]
+        # read happens once at import time, before any test fixture runs,
+        # which would make this module impossible to import in a test
+        # environment. Reading it here is also what lets monkeypatch.setenv()
+        # actually control this in tests.
+        key_id = os.environ["REVIEW_ARTIFACTS_KMS_KEY_ID"]
         try:
-            entries = get_review_entries(s3, key, load_encryption_key())
+            entries = get_review_entries(s3, key, kms, key_id)
         except ClientError as error:
             if error.response["Error"]["Code"] == "NoSuchKey":
                 return _response(404, {"error": "Not found"})
