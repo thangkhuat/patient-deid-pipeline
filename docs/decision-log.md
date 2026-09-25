@@ -92,11 +92,10 @@ role and policy existing is confirmed by the job assuming and using
 them. That first deploy also shipped the upload validation entry below,
 which until then was merged but not live.
 
-Not yet verified: a functional check after the deploy (a note submitted
-through the frontend, a review opened in the review UI). And whether
-the ignore_changes blocks are live in Terraform state -- the next
-terraform plan should show no code change on the three functions, which
-is the check.
+Verified afterward: a note submitted through the real frontend, confirmed
+in both redacted-output and review-artifacts, and a flagged entry opened
+and correctly decrypted through the Reviewer UI -- the deployed code
+proven correct in actual use, not just successfully uploaded.
 
 Phase 4 as a whole: deploy-frontend.yml's first real run (a manual
 workflow_dispatch from main, run 36112205515) also passed, closing the
