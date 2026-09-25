@@ -2,6 +2,76 @@
 
 Newest first. Each entry: decision, rationale, alternatives considered.
 
+## Frontend deployer identity created -- thang-admin no longer used for
+## routine site deployments
+
+*2026-09-26.*
+
+Closes a mismatch that had existed since the very first frontend
+deployment: every site file (index.html, review.html, and every
+subsequent revision of both -- the file picker, the PKCE rewrite,
+review.html's own creation) had been pushed using thang-admin's full
+AdministratorAccess, purely because the bucket was correctly built
+fully private from the start (no identity was ever given s3:PutObject),
+and thang-admin's broad access was the pragmatic fix in the moment the
+first upload failed.
+
+Worth recording why this was a genuine inconsistency, not just untidy:
+every other identity in this project is narrowly scoped to exactly what
+it needs, with a correspondingly bounded blast radius if compromised --
+pipeline_lambda can only touch its own three buckets, upload_backend
+only writes input-notes, review_backend only reads review-artifacts.
+thang-admin performing a small, routine, mechanical task (copying two
+static HTML files) broke that pattern completely: a compromise of those
+credentials was never bounded to "someone could deface two web pages,"
+it was the entire account, PHI-holding buckets included.
+
+**A new IAM user, not a role** -- deliberate, matching an established
+pattern rather than defaulting to whichever shape was more familiar.
+Roles in this project are for things AWS services assume
+(pipeline_lambda, upload_backend) or temporarily-assumed test access.
+This identity's actual job -- a person running aws s3 cp from their own
+machine, as a routine habit -- is structurally identical to
+patient-deid, terraform-patient-deid, and patient-deid-reviewer-cli:
+all plain IAM users with their own access keys, not roles.
+
+Named patient-deid-frontend-deployer, deliberately avoiding both
+"Operator" and "Reviewer" -- both terms already carry specific,
+established meaning elsewhere in this project (FR-3/FR-10), and reusing
+either here would have recreated the exact naming ambiguity the
+reviewer_test rename exists to have already resolved.
+
+Granted s3:PutObject and s3:DeleteObject, scoped to
+patient-deid-frontend's object-level ARN (the /* suffix, same
+bucket-vs-object distinction already learned for GetObject/PutObject
+elsewhere). DeleteObject included deliberately, not just PutObject --
+a file ever renamed or removed from site/ would need it to actually
+clean up the stale object in the bucket; PutObject alone only ever adds
+or overwrites, never removes.
+
+**thang-admin's own scope is explicitly unchanged**, not partially
+retired -- worth being precise this is a correction of what had drifted
+onto it opportunistically, not a reduction of its actual intended
+purpose. It remains the human operator's day-to-day console/CLI
+identity: creating and managing other IAM identities, the several
+Console-only policy widenings terraform-patient-deid has needed this
+session, Cognito account management, and general cross-service
+verification. The underlying principle, worth recording plainly: the
+test for carving out a narrow identity is whether a task is narrow and
+repetitive enough to justify one -- frontend deployment (one bucket, two
+file types, the same action every time) passed that test cleanly;
+open-ended day-to-day administration does not, since "whatever
+unanticipated task comes up next" can't usefully be pre-scoped, which is
+exactly why terraform-patient-deid's own policy has needed reactive
+widening five separate times this session rather than being narrowed
+further from the start.
+
+Verified for real, not just trusted from a clean apply: a genuine
+aws s3 cp of index.html, run with --profile frontend-deployer alone,
+succeeded -- the same task thang-admin had performed every previous
+time, now correctly done by an identity whose only capability is
+exactly this.
+
 ## reviewer_test renamed to patient-deid-reviewer-cli -- clarifying its
 ## real role, not retiring it
 

@@ -189,3 +189,18 @@ resource "aws_iam_role_policy" "review_backend_read_review_artifacts" {
     ]
   })
 }
+
+resource "aws_iam_user" "frontend_deployer" {
+  name = "patient-deid-frontend-deployer"
+}
+
+resource "aws_iam_user_policy" "frontend_deployer_write_frontend" {
+  name = "write-frontend"
+  user = aws_iam_user.frontend_deployer.name
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      { Effect = "Allow", Action = ["s3:PutObject", "s3:DeleteObject"], Resource = "${aws_s3_bucket.frontend.arn}/*" }
+    ]
+  })
+}
