@@ -19,7 +19,7 @@ resource "aws_iam_role" "github_actions_frontend_deploy" {
           StringLike = {
             "token.actions.githubusercontent.com:sub" = [
               "repo:thangkhuat/patient-deid-pipeline:ref:refs/heads/main",
-              "repo:thangkhuat@*/patient-deid-pipeline@*:ref:refs/heads/main"
+              "repo:thangkhuat@177017208/patient-deid-pipeline@1327731147:ref:refs/heads/main"
             ]
           }
         }
@@ -34,7 +34,8 @@ resource "aws_iam_role_policy" "github_actions_frontend_deploy_write" {
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
-      { Effect = "Allow", Action = ["s3:PutObject", "s3:DeleteObject"], Resource = "${aws_s3_bucket.frontend.arn}/*" }
+      { Effect = "Allow", Action = ["s3:PutObject", "s3:DeleteObject"], Resource = "${aws_s3_bucket.frontend.arn}/*" },
+      { Effect = "Allow", Action = "cloudfront:CreateInvalidation", Resource = aws_cloudfront_distribution.frontend.arn }
     ]
   })
 }
