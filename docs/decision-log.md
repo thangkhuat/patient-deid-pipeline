@@ -2,6 +2,52 @@
 
 Newest first. Each entry: decision, rationale, alternatives considered.
 
+## sync --delete adopted for frontend deploys, closing the DeleteObject
+## gap named at merge time
+
+*2026-09-26.*
+
+Supersedes a specific line from the GitHub Actions / OIDC entry below:
+"Removing stale objects is still manual: aws s3 sync --delete would
+need s3:ListBucket, which neither deploy identity has." That was
+accurate when written -- the workflow originally shipped with
+aws s3 cp site/ s3://patient-deid-frontend/ --recursive, which never
+removes anything, leaving the DeleteObject permission already granted
+to patient-deid-github-actions-frontend-deploy unused. Left as a
+recorded, deliberate gap rather than fixed inline at merge time, since
+the PR under review then was scoped to getting the workflow's first
+real run passing, not to closing every gap a review surfaced in the
+same pass.
+
+**Swapped to aws s3 sync site/ s3://patient-deid-frontend/ --delete.**
+Confirmed the exact permission gap the earlier entry predicted: sync
+needs to read the bucket's current contents before it can compute what
+to add, update, or remove -- a bucket-level s3:ListBucket call,
+structurally distinct from the object-level PutObject/DeleteObject
+already granted (same bucket-vs-object ARN distinction learned
+repeatedly elsewhere in this project). Added as its own statement,
+scoped to the bucket's own ARN, no /* suffix, since ListBucket applies
+to the bucket itself rather than individual objects within it.
+
+**Deliberately sequenced before merging the workflow change that
+depends on it** -- applying the Terraform change first and confirming
+success, rather than merging both together, since a workflow calling
+sync without the permission already in place would be a guaranteed
+failure on its very next run, not a theoretical risk.
+
+**--delete is a real, accepted behavior change, not a side effect --
+worth recording precisely what it means going forward.** The bucket
+holds no versioning, so this is genuinely irreversible: from this point
+on, site/ is treated as the complete, authoritative list of what
+belongs in patient-deid-frontend. Anything ever placed there by hand,
+outside of what site/ contains, is deleted on the next automated
+deploy with no way to recover it. Confirmed safe at the moment of
+adoption -- the bucket held only index.html and review.html, identical
+to site/'s own contents, so the first run under the new command will
+delete nothing. The risk is forward-looking: it depends on site/ remaining the
+sole source of truth for this bucket's contents, an assumption worth
+re-checking if that ever stops being true.
+
 ## Frontend deployment moved into GitHub Actions, authenticated via
 ## OIDC -- no long-lived AWS keys stored in GitHub
 
