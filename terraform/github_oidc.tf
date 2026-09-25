@@ -75,7 +75,9 @@ resource "aws_iam_role_policy" "github_actions_lambda_deploy_update_code" {
     Statement = [
       {
         Effect = "Allow"
-        Action = "lambda:UpdateFunctionCode"
+        # GetFunctionConfiguration is what `aws lambda wait function-updated`
+        # polls to confirm the new code is live.
+        Action = ["lambda:UpdateFunctionCode", "lambda:GetFunctionConfiguration"]
         Resource = [
           aws_lambda_function.pipeline.arn,
           aws_lambda_function.upload_backend.arn,
