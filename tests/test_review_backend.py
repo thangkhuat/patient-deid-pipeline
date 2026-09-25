@@ -136,7 +136,6 @@ def test_is_reviewer_accepts_members(groups):
     ["ReviewersPending"], "[ReviewersPending]", "NotReviewers", "[Operators]", "",
 ])
 def test_is_reviewer_rejects_near_miss_group_names(groups):
-    # The substring check this replaced accepted every string case here.
     assert not is_reviewer({"cognito:groups": groups})
 
 

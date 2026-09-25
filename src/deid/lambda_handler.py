@@ -36,10 +36,6 @@ def handler(event, context):
 
     output_key = input_key.rsplit(".", 1)[0] + ".json"
 
-    # The FR-7 artifact split, implemented for real here -- build_report()
-    # itself stays unchanged, one combined dict; this is where it actually
-    # gets physically separated into two objects, in two buckets, so no
-    # single file ever carries both redacted_text and review_queue together.
     s3.put_object(
         Bucket=REDACTED_OUTPUT_BUCKET,
         Key=output_key,

@@ -38,8 +38,6 @@ def parse_groups(raw) -> list[str]:
 
 
 def is_reviewer(claims: dict) -> bool:
-    # Exact membership, not substring: "Reviewers" in "ReviewersPending"
-    # is True for a string, which would grant access to the wrong group.
     return REVIEWER_GROUP in parse_groups(claims.get("cognito:groups", ""))
 
 

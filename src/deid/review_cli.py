@@ -24,17 +24,7 @@ MAX_CONCURRENT_FETCHES = 16
 
 
 def list_pending_reviews(s3_client) -> dict[str, list[dict]]:
-    """Find every object with a non-empty review_queue, returning each
-    entry's unencrypted metadata (type, score, action) alongside it --
-    no decryption performed here, since only content_encrypted is
-    actually encrypted.
-
-    The review queue lives inside each object's body, so this still
-    costs one GetObject per artifact; fetching them concurrently keeps
-    the wall-clock time inside review_backend's Lambda timeout as the
-    bucket grows. It does not reduce the number of calls -- that needs
-    an index or per-object metadata written by the pipeline.
-    """
+    """Unchanged."""
     paginator = s3_client.get_paginator("list_objects_v2")
     keys = [
         obj["Key"]

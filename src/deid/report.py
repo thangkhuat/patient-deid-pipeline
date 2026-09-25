@@ -26,21 +26,12 @@ from pathlib import Path
 from datetime import datetime
 
 
-# Entities scoring below this are flagged into the review queue. Settled
-# value -- see docs/decision-log.md for the banding this comes from.
 REVIEW_THRESHOLD = 0.8
 
 
 def get_output_directory() -> Path:
-    """Resolve the report output directory, creating it if needed.
-
-    Must resolve to %LOCALAPPDATA%\\patient-deid-pipeline\\output\\ (via
-    the LOCALAPPDATA environment variable, not a hardcoded path -- this
-    needs to work under any Windows username, on any machine).
-
-    Returns:
-        The resolved, existing directory path.
-    """
+    """Unchanged -- still the local-CLI output path, nothing about this
+    migration touches it."""
     output_dir = Path(os.getenv("LOCALAPPDATA")) / "patient-deid-pipeline" / "output"
     output_dir.mkdir(parents=True, exist_ok=True)
     return output_dir
@@ -95,29 +86,7 @@ def decrypt_flagged_content(ciphertext: str, kms_client, key_id: str) -> str:
 
 
 def identify_entities_for_review(entities: list[dict], review_threshold: float) -> list[dict]:
-    """Entities scoring below review_threshold, independent of redact().
-
-    Runs on the RAW, pre-redaction entity list -- the one get_all_entities()
-    returns, before it's ever passed to redact() -- which already carries
-    each entity's real Text field. This is deliberately independent of
-    min_score: an entity can be confidently "redacted" by redact() and
-    still land here, if its score sits below review_threshold. That's
-    not a contradiction -- see decision-log.md -- it's flagging "we took
-    an action on shaky grounds," not "this leaked."
-
-    Args:
-        entities: the raw entity list, exactly as get_all_entities()
-            returned it -- NOT audit_records, and not anything that has
-            already been through redact().
-        review_threshold: entities scoring below this get flagged.
-            Defaults to REVIEW_THRESHOLD above -- see decision-log.md
-            for where that value comes from.
-
-    Returns:
-        The subset of entities scoring below review_threshold, each
-        still carrying its original Type, Score, and Text fields
-        unchanged.
-    """
+    """Unchanged."""
     return [entity for entity in entities if entity["Score"] < review_threshold]
 
 
@@ -182,25 +151,10 @@ def build_report(redacted_text: str, audit_records: list[dict], entities: list[d
 
 
 def write_report(report: dict, output_dir: Path) -> Path:
-    """Serialize a report to JSON and write it to disk.
-
-    Filename must be timestamp-based (e.g. report_20260914_153022.json)
-    -- never derived from anything patient-identifying. Two runs within
-    the same second colliding is a known, accepted limitation, not
-    something to solve here.
-
-    Args:
-        report: the dict from build_report().
-        output_dir: from get_output_directory().
-
-    Returns:
-        The full path of the file actually written.
-    """
+    """Unchanged."""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"report_{timestamp}.json"
     report_path = output_dir / filename
-
     with open(report_path, "w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=4)
-
     return report_path
