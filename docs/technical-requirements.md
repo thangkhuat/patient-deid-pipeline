@@ -212,9 +212,24 @@ accident.
 
 ### CI
 
-`.github/workflows/test.yml` runs the offline suite on every push and pull
-request against `main` -- `python -m pytest` on Python 3.10, matching the
-Lambda runtime. It has no AWS credentials and no OIDC role, by design: if a
-test ever needs them to pass, that test isn't offline, and the fix belongs in
-the test. Invoked with `python -m` rather than bare `pytest`, because `-m` is
-what puts the repo root on `sys.path` for the `src.deid.*` imports.
+`.github/workflows/test.yml` has two jobs:
+
+- `test` runs the offline suite on every push and pull request against
+  `main` -- `python -m pytest` on Python 3.10, matching the Lambda runtime.
+  This job has no AWS credentials and no OIDC role, by design: if a test ever
+  needs them to pass, that test isn't offline, and the fix belongs in the
+  test. Invoked with `python -m` rather than bare `pytest`, because `-m` is
+  what puts the repo root on `sys.path` for the `src.deid.*` imports.
+- `deploy` runs only after `test` passes, and only on a push to `main`. It
+  assumes `patient-deid-github-actions-lambda-deploy` via OIDC (allowed only
+  `lambda:UpdateFunctionCode` and `lambda:GetFunctionConfiguration` on the
+  three functions), zips `src/` once, and for each function runs
+  `update-function-code` then `aws lambda wait function-updated`, so the job
+  only passes once the code is live.
+
+The frontend deploys separately, from `.github/workflows/deploy-frontend.yml`,
+on pushes to `main` that touch `site/**`.
+
+Terraform ignores `source_code_hash` on the three functions, so Lambda code is
+CI's job alone: `terraform apply` doesn't deploy code, and can't roll back what
+CI shipped. The local package zips must still exist for `terraform plan`.
