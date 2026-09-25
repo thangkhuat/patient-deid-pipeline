@@ -1,0 +1,24 @@
+# .github/workflows/deploy-frontend.yml
+name: Deploy frontend
+
+on:
+  push:
+    branches: [main]
+    paths: ["site/**"]
+
+permissions:
+  id-token: write   # required -- this job's #1 most common failure is forgetting this line
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::471116065597:role/patient-deid-github-actions-frontend-deploy
+          aws-region: ap-southeast-2
+      - run: |
+          aws s3 cp site/index.html s3://patient-deid-frontend/index.html
+          aws s3 cp site/review.html s3://patient-deid-frontend/review.html
