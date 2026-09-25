@@ -100,3 +100,50 @@ def test_malformed_requests_get_400_and_write_nothing(upload_handler, s3, event)
     assert response["statusCode"] == 400
     assert "error" in json.loads(response["body"])
     assert s3.puts == {}
+
+
+@pytest.mark.parametrize("content", [
+    123, None, ["a note"], {"text": "a note"}, True,
+], ids=["int", "null", "list", "object", "bool"])
+def test_non_string_content_gets_400_not_500(upload_handler, s3, content):
+    """Used to reach note_text.encode() and raise AttributeError."""
+    response = upload_handler.handler(api_event(content), None)
+
+    assert response["statusCode"] == 400
+    assert s3.puts == {}
+
+
+@pytest.mark.parametrize("content", ["", "   ", "\n\t "], ids=["empty", "spaces", "whitespace"])
+def test_blank_content_gets_400(upload_handler, s3, content):
+    """DetectPHI rejects empty text, so an accepted blank note would fail
+    later in pipeline_lambda, after the caller had already been told 202."""
+    response = upload_handler.handler(api_event(content), None)
+
+    assert response["statusCode"] == 400
+    assert s3.puts == {}
+
+
+def test_note_at_the_detectphi_limit_is_accepted(upload_handler, s3):
+    response = upload_handler.handler(api_event("a" * upload_handler.MAX_NOTE_LENGTH), None)
+
+    assert response["statusCode"] == 202
+    assert len(s3.puts) == 1
+
+
+def test_note_over_the_detectphi_limit_gets_400(upload_handler, s3):
+    response = upload_handler.handler(api_event("a" * (upload_handler.MAX_NOTE_LENGTH + 1)), None)
+
+    assert response["statusCode"] == 400
+    assert s3.puts == {}
+
+
+def test_limit_matches_botocores_detectphi_model(upload_handler):
+    """MAX_NOTE_LENGTH mirrors a limit owned by AWS. Checked against
+    botocore's own service model, so a change on AWS's side (picked up by a
+    boto3 upgrade) fails here rather than silently drifting."""
+    import botocore.session
+
+    model = botocore.session.get_session().get_service_model("comprehendmedical")
+    text_shape = model.operation_model("DetectPHI").input_shape.members["Text"]
+
+    assert text_shape.metadata["max"] == upload_handler.MAX_NOTE_LENGTH
