@@ -2,6 +2,57 @@
 
 Newest first. Each entry: decision, rationale, alternatives considered.
 
+## Frontend deployment moved into GitHub Actions, authenticated via
+## OIDC -- no long-lived AWS keys stored in GitHub
+
+*2026-09-26.*
+
+A push to main touching site/** (or a manual workflow_dispatch run from
+main) now uploads site/ to patient-deid-frontend and invalidates the
+CloudFront cache. The workflow assumes a dedicated role,
+patient-deid-github-actions-frontend-deploy, through GitHub's OIDC
+provider.
+
+**OIDC role, not patient-deid-frontend-deployer's access keys stored as
+a GitHub secret.** Stored keys are long-lived and would sit in a second
+place outside AWS; the OIDC token is minted per run and expires with
+it. The frontend-deployer IAM user stays for manual deploys from a
+local machine -- a person with a CLI profile, the same reason it was
+created as a user and not a role.
+
+**Trust policy scoped to this repo's main branch only.** aud must be
+sts.amazonaws.com; sub must match refs/heads/main, so workflows on pull
+requests or any other branch cannot assume the role. The second sub
+entry pins the owner and repository numeric IDs
+(thangkhuat@177017208/patient-deid-pipeline@1327731147) rather than
+wildcarding them -- IDs survive an account or repo rename, names don't,
+and a wildcarded ID would have matched anything the name-based entry
+already matched, adding nothing.
+
+**Permissions mirror frontend-deployer, plus one addition:**
+cloudfront:CreateInvalidation, scoped to this one distribution's ARN.
+The distribution uses default caching (up to 24h), so without it a
+deploy could succeed and still not be visible.
+
+**Uploads all of site/ (cp --recursive), not a hardcoded file list.**
+A file added to site/ would otherwise silently never deploy. Removing
+stale objects is still manual: aws s3 sync --delete would need
+s3:ListBucket on the bucket itself, which neither deploy identity has.
+
+**Actions pinned to commit SHAs, not version tags.** A tag can be
+repointed at different code; this job holds AWS credentials, however
+narrow.
+
+**The OIDC provider is read as a data source, not managed as a
+resource.** It already existed in the account, created outside
+Terraform. There is exactly one per issuer URL per account, shared by
+any future role trusting GitHub, so this role's lifecycle should not
+own it.
+
+Not yet verified by a real run: merging this change doesn't touch
+site/, so the push trigger won't fire; the first check is a manual
+workflow_dispatch run from main after apply.
+
 ## Frontend deployer identity created -- thang-admin no longer used for
 ## routine site deployments
 
