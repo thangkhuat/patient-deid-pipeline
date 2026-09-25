@@ -156,7 +156,6 @@ resource "aws_iam_user_policy" "reviewer_test_list_review_artifacts" {
   })
 }
 
-# iam.tf, appended
 resource "aws_iam_role" "review_backend" {
   name = "patient-deid-review-backend"
   assume_role_policy = jsonencode({

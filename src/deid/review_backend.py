@@ -15,41 +15,57 @@ a Reviewer."
 import json
 
 import boto3
-
-from src.deid.report import load_encryption_key, decrypt_flagged_content
-
-REVIEW_ARTIFACTS_BUCKET = "patient-deid-review-artifacts"
-
-
-import json
-
-import boto3
+from botocore.exceptions import ClientError
 
 from src.deid.report import load_encryption_key
 from src.deid.review_cli import list_pending_reviews, get_review_entries
 
-REVIEW_ARTIFACTS_BUCKET = "patient-deid-review-artifacts"
+REVIEWER_GROUP = "Reviewers"
+
+
+def parse_groups(raw) -> list[str]:
+    """Normalise the cognito:groups claim to a list of group names.
+
+    The raw token carries a JSON array, but API Gateway may hand it to
+    the Lambda flattened into a string -- "[Reviewers Operators]" or
+    "Reviewers,Operators" depending on the authorizer type. Cognito group
+    names can't contain whitespace, so splitting on whitespace and commas
+    recovers the exact names either way.
+    """
+    if isinstance(raw, list):
+        return raw
+    return raw.strip("[]").replace(",", " ").split()
 
 
 def is_reviewer(claims: dict) -> bool:
-    return "Reviewers" in claims.get("cognito:groups", "")
+    # Exact membership, not substring: "Reviewers" in "ReviewersPending"
+    # is True for a string, which would grant access to the wrong group.
+    return REVIEWER_GROUP in parse_groups(claims.get("cognito:groups", ""))
+
+
+def _response(status: int, body) -> dict:
+    return {"statusCode": status, "body": json.dumps(body)}
 
 
 def handler(event, context):
     claims = event["requestContext"]["authorizer"]["jwt"]["claims"]
     if not is_reviewer(claims):
-        return {"statusCode": 403, "body": json.dumps({"error": "Not authorized"})}
+        return _response(403, {"error": "Not authorized"})
 
     s3 = boto3.client("s3")
     route_key = event["requestContext"]["routeKey"]
 
     if route_key == "GET /reviews":
-        pending = list_pending_reviews(s3)
-        return {"statusCode": 200, "body": json.dumps(pending)}
+        return _response(200, list_pending_reviews(s3))
 
     if route_key == "GET /reviews/{key}":
         key = event["pathParameters"]["key"]
-        entries = get_review_entries(s3, key, load_encryption_key())
-        return {"statusCode": 200, "body": json.dumps(entries)}
+        try:
+            entries = get_review_entries(s3, key, load_encryption_key())
+        except ClientError as error:
+            if error.response["Error"]["Code"] == "NoSuchKey":
+                return _response(404, {"error": "Not found"})
+            raise
+        return _response(200, entries)
 
-    return {"statusCode": 404, "body": json.dumps({"error": "Not found"})}
+    return _response(404, {"error": "Not found"})

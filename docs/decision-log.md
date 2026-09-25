@@ -38,10 +38,16 @@ is_reviewer() written to tolerate a real, unresolved documentation
 ambiguity rather than guess: AWS's REST API authorizer is documented to
 flatten cognito:groups into a comma-separated string, and it's unclear
 from documentation whether HTTP API preserves the JSON array shape or
-does the same flattening. `"Reviewers" in claims.get("cognito:groups", "")`
-is correct either way -- Python's `in` performs list-membership and
-substring-containment identically, so the same one-line check works
-regardless of which serialization AWS actually uses here.
+does the same flattening. The first version,
+`"Reviewers" in claims.get("cognito:groups", "")`, was *not* correct
+either way, despite looking it: on a string, Python's `in` is substring
+containment, so a group named "ReviewersPending" or "NotReviewers"
+would have passed. Caught in pre-merge review. parse_groups() now
+normalises every shape -- list, "[a b]", "a,b" -- to a list of exact
+names first (Cognito group names can't contain whitespace, so splitting
+is lossless), and is_reviewer() checks list membership only. The
+client-side hint in review.html got the same fix: Array#includes on
+the decoded array, not String#includes.
 
 **Cognito User Pool Group ("Reviewers"), not a second, parallel auth
 system.** The existing test account added via admin-add-user-to-group,

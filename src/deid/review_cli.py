@@ -11,12 +11,14 @@ functions that already existed, tested, since several sessions back.
 """
 import argparse
 import json
+from concurrent.futures import ThreadPoolExecutor
 
 import boto3
 
 from src.deid.report import load_encryption_key, decrypt_flagged_content
 
 REVIEW_ARTIFACTS_BUCKET = "patient-deid-review-artifacts"
+MAX_CONCURRENT_FETCHES = 16
 
 
 def list_pending_reviews(s3_client) -> dict[str, list[dict]]:
@@ -24,18 +26,27 @@ def list_pending_reviews(s3_client) -> dict[str, list[dict]]:
     entry's unencrypted metadata (type, score, action) alongside it --
     no decryption performed here, since only content_encrypted is
     actually encrypted.
+
+    The review queue lives inside each object's body, so this still
+    costs one GetObject per artifact; fetching them concurrently keeps
+    the wall-clock time inside review_backend's Lambda timeout as the
+    bucket grows. It does not reduce the number of calls -- that needs
+    an index or per-object metadata written by the pipeline.
     """
-    pending = {}
     paginator = s3_client.get_paginator("list_objects_v2")
-    for page in paginator.paginate(Bucket=REVIEW_ARTIFACTS_BUCKET):
-        for obj in page.get("Contents", []):
-            key = obj["Key"]
-            response = s3_client.get_object(Bucket=REVIEW_ARTIFACTS_BUCKET, Key=key)
-            data = json.loads(response["Body"].read())
-            queue = data.get("review_queue", [])
-            if queue:
-                pending[key] = queue
-    return pending
+    keys = [
+        obj["Key"]
+        for page in paginator.paginate(Bucket=REVIEW_ARTIFACTS_BUCKET)
+        for obj in page.get("Contents", [])
+    ]
+
+    def fetch_queue(key):
+        response = s3_client.get_object(Bucket=REVIEW_ARTIFACTS_BUCKET, Key=key)
+        return json.loads(response["Body"].read()).get("review_queue", [])
+
+    with ThreadPoolExecutor(max_workers=MAX_CONCURRENT_FETCHES) as pool:
+        queues = pool.map(fetch_queue, keys)
+    return {key: queue for key, queue in zip(keys, queues) if queue}
 
 
 def get_review_entries(s3_client, key: str, encryption_key: bytes) -> list[dict]:
@@ -85,3 +96,7 @@ def main():
             print("-" * 40)
     else:
         parser.print_help()
+
+
+if __name__ == "__main__":
+    main()

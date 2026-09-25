@@ -163,10 +163,12 @@
     const token = getAccessToken();
     if (!token) { showScreen("loginScreen"); return; }
     const claims = decodeJwtPayload(token);
-    const groups = claims["cognito:groups"] || "";
+    // The raw token carries cognito:groups as a JSON array; Array#includes
+    // is exact membership (String#includes would also match "ReviewersPending").
+    const groups = claims["cognito:groups"] || [];
     // Client-side hint only -- the real check is in review_backend.py's
     // is_reviewer(). This just avoids showing UI that would fail anyway.
-    if (!groups.includes("Reviewers")) { showScreen("notAuthorizedScreen"); return; }
+    if (!Array.isArray(groups) || !groups.includes("Reviewers")) { showScreen("notAuthorizedScreen"); return; }
     showScreen("appScreen");
     loadList();
   }
@@ -182,6 +184,17 @@
     detailView.style.display = "none";
     listView.style.display = "block";
   });
+
+  // Everything rendered from the API goes through textContent, never
+  // innerHTML: entry.content is decrypted text from an Operator-submitted
+  // note, so markup in it must display as text, not execute in a
+  // Reviewer's session (where it could read access_token).
+  function el(tag, className, text) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    node.textContent = text;
+    return node;
+  }
 
   async function apiGet(path) {
     const response = await fetch(`${API_BASE}${path}`, {
@@ -206,7 +219,7 @@
       const count = pending[key].length;
       const div = document.createElement("div");
       div.className = "item";
-      div.innerHTML = `<span>${key}</span><span class="count">${count} flagged</span>`;
+      div.append(el("span", "", key), el("span", "count", `${count} flagged`));
       div.addEventListener("click", () => loadDetail(key));
       listContainer.appendChild(div);
     });
@@ -226,10 +239,11 @@
     entries.forEach(entry => {
       const div = document.createElement("div");
       div.className = "entry";
-      div.innerHTML = `
-        <span class="label">${entry.type} -- score ${entry.score.toFixed(4)}</span>
-        <span class="badge ${entry.action}">${entry.action}</span>
-        <div class="content">${entry.content}</div>`;
+      div.append(
+        el("span", "label", `${entry.type} -- score ${entry.score.toFixed(4)}`),
+        el("span", `badge ${entry.action}`, entry.action),
+        el("div", "content", entry.content),
+      );
       detailContainer.appendChild(div);
     });
   }
