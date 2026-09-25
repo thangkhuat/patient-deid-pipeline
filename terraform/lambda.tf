@@ -11,10 +11,25 @@ resource "aws_lambda_function" "pipeline" {
 
   environment {
     variables = {
-      REDACTED_OUTPUT_BUCKET     = aws_s3_bucket.redacted_output.bucket
-      REVIEW_ARTIFACTS_BUCKET    = aws_s3_bucket.review_artifacts.bucket
+      REDACTED_OUTPUT_BUCKET      = aws_s3_bucket.redacted_output.bucket
+      REVIEW_ARTIFACTS_BUCKET     = aws_s3_bucket.review_artifacts.bucket
       REVIEW_ARTIFACTS_KMS_KEY_ID = aws_kms_key.review_artifacts.arn
     }
+  }
+
+  # Function code is deployed by CI (.github/workflows/test.yml, deploy
+  # job), not by Terraform. Without this, the next `terraform apply` --
+  # for anything, even an unrelated change -- would see the live code's
+  # hash differ from the local zip and push the local zip back over
+  # whatever CI deployed. Everything else about the function (role, env
+  # vars, timeout, memory) is still Terraform-managed.
+  #
+  # The tradeoff: rebuilding the local zip and running `terraform apply`
+  # no longer deploys code at all -- it's now a silent no-op for code.
+  # The local zip still has to exist (filebase64sha256 above is still
+  # evaluated), it just no longer drives anything.
+  lifecycle {
+    ignore_changes = [source_code_hash]
   }
 }
 
@@ -53,6 +68,11 @@ resource "aws_lambda_function" "upload_backend" {
       INPUT_NOTES_BUCKET = aws_s3_bucket.input_notes.bucket
     }
   }
+
+  # Code deployed by CI -- see the comment on aws_lambda_function.pipeline.
+  lifecycle {
+    ignore_changes = [source_code_hash]
+  }
 }
 
 resource "aws_lambda_function" "review_backend" {
@@ -70,5 +90,10 @@ resource "aws_lambda_function" "review_backend" {
     variables = {
       REVIEW_ARTIFACTS_KMS_KEY_ID = aws_kms_key.review_artifacts.arn
     }
+  }
+
+  # Code deployed by CI -- see the comment on aws_lambda_function.pipeline.
+  lifecycle {
+    ignore_changes = [source_code_hash]
   }
 }
