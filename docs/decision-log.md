@@ -2,6 +2,101 @@
 
 Newest first. Each entry: decision, rationale, alternatives considered.
 
+## Reviewer notification closed: SNS on flagged notes, with a link to
+## the actual review page
+
+*2026-09-26.*
+
+Closes the gap named at the end of last session: being a Reviewer meant
+remembering to check. pipeline_lambda now publishes to an SNS topic
+whenever a note's review_queue comes back non-empty -- the same
+condition that has determined every review-queue outcome all along.
+
+**Triggered from inside the handler, not from an S3 event on
+review_artifacts.** pipeline_lambda writes to that bucket unconditionally
+on every run, even when review_queue is empty -- an S3-event trigger
+would have fired on every note processed, not just the ones actually
+needing review. Checking report["review_queue"] directly, where the
+data already lives in memory, avoids that entirely, and avoids a second
+Lambda invocation cycle just to re-fetch and re-parse something already
+on hand.
+
+**No separate SNS topic policy** -- confirmed against AWS's own
+same-account guidance, stated plainly: "do one of the following, but
+not both" (an identity-based IAM policy, or a topic resource policy).
+A single aws_iam_role_policy granting sns:Publish, scoped to this one
+topic's ARN, attached to pipeline_lambda's role, is genuinely sufficient
+on its own. Worth recording why this is a different case from the five
+aws_lambda_permission confused-deputy grants elsewhere in this project:
+those existed because an external service was invoking a Lambda
+function, which Lambda specifically requires an explicit resource-based
+grant for. This is pipeline_lambda's own role calling out into SNS on
+its own initiative -- an ordinary identity-permission check, no
+confused-deputy pattern applies.
+
+**The notification never contains the flagged text, or even the entity
+type** -- deliberate, not an oversight. Same reasoning that's justified
+every access restriction on review-artifacts from the start: an email
+sits in an inbox, syncs to a phone, can be forwarded -- none of that is
+the controlled environment the encrypted storage and Cognito-gated
+review UI are. The message carries only a count, a reference ID, and
+(added after the first real test) a link to review.html -- enough to
+say something needs attention, never what.
+
+**A notification failure is deliberately non-fatal**, wrapped in its
+own try/except, logged but never raised. The actual redaction and
+storage are the real work; if SNS has a transient issue after that work
+already succeeded, the Lambda should still report success. The data is
+safe and correctly stored either way -- a failed notification means a
+Reviewer isn't pinged, not that anything is lost, and it's still
+findable by checking manually.
+
+**A missing link in the first version, caught only after the actual
+email was read for real rather than just reasoned about from the code**:
+the original message named "the Reviewer web UI" without giving any way
+to reach it, assuming the reader already had review.html's address
+memorized. Fixed by adding FRONTEND_URL as a plain module constant and
+including it directly in the message -- no Terraform change needed for
+this specific fix, since it's not an environment variable. Confirmed
+safe to include as plain text: the URL alone reveals nothing, since
+review.html still requires a real Cognito login before showing any
+content -- the same relationship as a bank notification saying "log in
+here to view your statement."
+
+**A real incident during rollout, worth recording since it also explains
+something that went silently wrong last session:** applying this work
+surfaced a "changed outside of Terraform" notice -- the reviewer_test
+IAM user's real name in AWS still read patient-deid-reviewer-test,
+despite last session's rename apparently succeeding. Root cause:
+terraform-patient-deid's inline policy had iam:CreateUser,
+iam:DeleteUser, and several others, but never iam:UpdateUser -- because
+when that statement was first written, only user creation had been a
+demonstrated need. The rename attempt failed with AccessDenied at that
+point last session too, just not caught, because the apply's output
+wasn't checked closely enough to notice one resource had failed while
+unrelated ones in the same run succeeded independently. This is the
+fifth time this session terraform-patient-deid's policy has needed
+widening to an action nobody anticipated (CreateRole, CreateUser, and
+now UpdateUser, alongside the earlier KMS and Users-statement gaps) --
+worth naming as a real, recurring pattern of this identity's policy
+being widened reactively to demonstrated need, never preemptively,
+consistent with this project's approach everywhere else, not a fresh
+mistake each time. Fixed the same way as every previous instance: added
+by hand through the Console, since terraform-patient-deid cannot grant
+itself new permissions via Terraform.
+
+**Verification also corrected to match**, since the earlier
+`review_cli.py --list` test that seemed to confirm the rename was
+actually the wrong evidence -- it could only ever prove access keys and
+permissions still worked, which is unaffected by whether the underlying
+name is correct, since both are tied to the user's unique ID, not its
+display name. Genuine confirmation this time came directly from the IAM
+Console's own Users list, queried live against real AWS state.
+
+Full loop verified for real after the link fix specifically: a fresh
+note submitted through the real frontend produced a real email,
+containing a genuinely clickable link, landing correctly on review.html.
+
 ## reviewer_test renamed to patient-deid-reviewer-cli -- clarifying its
 ## real role, not retiring it
 

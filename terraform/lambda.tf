@@ -11,9 +11,10 @@ resource "aws_lambda_function" "pipeline" {
 
   environment {
     variables = {
-      REDACTED_OUTPUT_BUCKET     = aws_s3_bucket.redacted_output.bucket
-      REVIEW_ARTIFACTS_BUCKET    = aws_s3_bucket.review_artifacts.bucket
-      REVIEW_ARTIFACTS_KMS_KEY_ID = aws_kms_key.review_artifacts.arn
+      REDACTED_OUTPUT_BUCKET         = aws_s3_bucket.redacted_output.bucket
+      REVIEW_ARTIFACTS_BUCKET        = aws_s3_bucket.review_artifacts.bucket
+      REVIEW_ARTIFACTS_KMS_KEY_ID    = aws_kms_key.review_artifacts.arn
+      REVIEW_NOTIFICATIONS_TOPIC_ARN = aws_sns_topic.review_notifications.arn
     }
   }
 }
@@ -72,3 +73,4 @@ resource "aws_lambda_function" "review_backend" {
     }
   }
 }
+

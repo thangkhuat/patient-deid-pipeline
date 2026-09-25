@@ -189,3 +189,14 @@ resource "aws_iam_role_policy" "review_backend_read_review_artifacts" {
     ]
   })
 }
+
+resource "aws_iam_role_policy" "pipeline_lambda_publish_review_notifications" {
+  name = "publish-review-notifications"
+  role = aws_iam_role.pipeline_lambda.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      { Effect = "Allow", Action = "sns:Publish", Resource = aws_sns_topic.review_notifications.arn }
+    ]
+  })
+}
