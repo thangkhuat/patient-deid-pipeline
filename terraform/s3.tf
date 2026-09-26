@@ -194,6 +194,24 @@ resource "aws_s3_bucket_lifecycle_configuration" "input_notes" {
       expired_object_delete_marker = true
     }
   }
+
+  # Expires the current raw note after 1 day. The note has served its whole
+  # purpose seconds after upload, once pipeline_lambda has processed it, so
+  # 1 day is generous rather than aggressive. Because the bucket is versioned,
+  # this adds a delete marker and makes the note noncurrent rather than
+  # erasing it; the bytes are purged by the 30-day noncurrent rule above.
+  # Until then the old version is inert to this project's own roles: no
+  # Terraform-managed identity holds s3:GetObjectVersion on this bucket.
+  # Not review_artifacts: that bucket is the review queue itself, not a
+  # transient input.
+  rule {
+    id     = "expire-current-raw-notes"
+    status = "Enabled"
+    filter {}
+    expiration {
+      days = 1
+    }
+  }
 }
 
 resource "aws_s3_bucket_lifecycle_configuration" "review_artifacts" {
