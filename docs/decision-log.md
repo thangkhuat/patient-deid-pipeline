@@ -2,6 +2,77 @@
 
 Newest first. Each entry: decision, rationale, alternatives considered.
 
+## CloudTrail data-event logging added for review-artifacts, closing
+## the deferred gap from the hardening pass
+
+*2026-09-26.*
+
+Picks up the item named and deliberately deferred in the previous
+entry: every access-control layer in this project governs whether
+someone *can* decrypt a flagged entity, but nothing recorded whether
+they actually *did*. This closes that specifically -- not account-wide,
+not even bucket-wide, just the one question that matters: who read a
+given object in review-artifacts, and when.
+
+**Pricing confirmed before designing anything, not assumed.** Verified
+directly against AWS's own current CloudTrail pricing page: data events
+are $0.10 per 100,000 events delivered, with no free tier -- unlike
+management events, which get one free copy per region. At this
+project's actual scale, this is genuinely negligible: even 10,000
+GetObject calls in a month, a generous estimate given the real usage
+pattern, costs one cent. The real cost isn't the per-event price; it's
+the new dedicated S3 bucket CloudTrail requires for its own log
+delivery, which carries its own (small) storage cost and needs the same
+hardening as every other bucket in this project -- versioning, TLS
+enforcement, lifecycle expiry -- as a direct follow-up, not a deferred
+afterthought.
+
+**The required CloudTrail-to-S3 bucket policy is the sixth independent
+instance, this session, of the same confused-deputy scoping pattern**
+(S3->pipeline_lambda, S3->CloudFront, API Gateway->upload_backend,
+API Gateway->auth_handler, API Gateway->review_backend, and now
+CloudTrail->its logs bucket). Confirmed against AWS's own documented
+policy shape rather than improvised: GetBucketAcl scoped to the bare
+bucket ARN, PutObject scoped specifically to the
+AWSLogs/{accountId}/* path rather than the whole bucket, and both
+statements conditioned on aws:SourceArn matching this one specific
+trail -- not cloudtrail.amazonaws.com broadly. Worth taking as further
+confirmation this is a core, recurring AWS idiom, not something novel
+each time it resurfaces.
+
+**A real circular dependency, resolved the same way this project
+already resolved an identical one.** The bucket policy needs the
+trail's ARN in its condition; the trail can't be created until that
+policy is already correctly in place -- a genuine chicken-and-egg
+problem, not a hypothetical one. Solved by constructing the trail's
+ARN as a plain string (fully predictable from account ID, region, and
+the trail's own literal name -- no need to reference the trail
+resource's actual output) rather than an attribute reference, which
+would otherwise force Terraform to see this as a cycle. Paired with an
+explicit depends_on on the trail resource itself, since Terraform has
+no way to infer this specific real-world AWS ordering requirement from
+the resource graph alone -- the same pattern already used for
+input_notes' S3 event trigger depending on its Lambda permission.
+
+**Scoped deliberately narrow, not left at CloudTrail's own defaults.**
+include_global_service_events and is_multi_region_trail both set to
+false -- this trail exists to answer one question about one bucket, not
+to become a general-purpose account audit log. The advanced_event_selector
+narrows further still: Data-category events, AWS::S3::Object resources,
+ARN prefix-matched to review_artifacts specifically, and eventName
+limited to GetObject alone. PutObject was deliberately excluded --
+already fully attributable, since pipeline_lambda is the only identity
+that ever writes there, so logging it would add cost without adding
+any real accountability value.
+
+**Status: designed and plan-reviewed, not yet applied.** terraform plan
+shows 4 to add (the logs bucket, its public access block, its bucket
+policy, and the trail itself) -- not yet run through apply. The new
+cloudtrail-logs bucket's own hardening (versioning, TLS-deny, lifecycle)
+is the immediate next step once this is confirmed live, so it doesn't
+sit as the one under-hardened bucket in an otherwise consistently
+hardened system.
+
 ## Security-hardening pass 1: versioning, TLS-only buckets, Cognito
 ## token lifetime
 
