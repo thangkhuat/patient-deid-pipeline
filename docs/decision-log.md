@@ -65,13 +65,19 @@ already fully attributable, since pipeline_lambda is the only identity
 that ever writes there, so logging it would add cost without adding
 any real accountability value.
 
-**Status: designed and plan-reviewed, not yet applied.** terraform plan
-shows 4 to add (the logs bucket, its public access block, its bucket
-policy, and the trail itself) -- not yet run through apply. The new
-cloudtrail-logs bucket's own hardening (versioning, TLS-deny, lifecycle)
-is the immediate next step once this is confirmed live, so it doesn't
-sit as the one under-hardened bucket in an otherwise consistently
-hardened system.
+**Status: applied and confirmed working live (2026-09-26).** terraform
+plan showed 4 to add (the logs bucket, its public access block, its
+bucket policy, and the trail itself), and apply created them. Tested
+live end to end with a real reviewer account: viewing a review file
+as that reviewer produced a GetObject log entry, delivered to the
+cloudtrail-logs bucket within 5 minutes of the read -- within the delay
+AWS documents for CloudTrail delivery, so logs are near-real-time, not
+instant. The
+chicken-and-egg ordering above holds in practice, not just in the plan.
+Still open: the new cloudtrail-logs bucket's own hardening (versioning,
+TLS-deny, lifecycle) is the immediate next step, so it doesn't sit as
+the one under-hardened bucket in an otherwise consistently hardened
+system.
 
 ## Security-hardening pass 1: versioning, TLS-only buckets, Cognito
 ## token lifetime
