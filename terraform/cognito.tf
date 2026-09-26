@@ -52,13 +52,13 @@ resource "aws_cognito_user_pool_client" "frontend" {
     "https://d2tno7uvqes2o4.cloudfront.net",
     "https://d2tno7uvqes2o4.cloudfront.net/review.html",
   ]
-  
+
   logout_urls = [
     "https://d2tno7uvqes2o4.cloudfront.net",
     "https://d2tno7uvqes2o4.cloudfront.net/review.html",
   ]
 
-  explicit_auth_flows = ["ALLOW_REFRESH_TOKEN_AUTH", "ALLOW_USER_SRP_AUTH"]
+  explicit_auth_flows = ["ALLOW_USER_SRP_AUTH"]
 }
 
 resource "aws_cognito_user_group" "reviewers" {

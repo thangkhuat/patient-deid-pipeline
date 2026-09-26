@@ -11,6 +11,16 @@ resource "aws_s3_bucket_public_access_block" "frontend" {
   restrict_public_buckets = true
 }
 
+# Makes `aws s3 sync --delete` recoverable: removed files become noncurrent
+# versions rather than being gone. See the versioning note in s3.tf -- this
+# can only ever be suspended, not disabled, once enabled.
+resource "aws_s3_bucket_versioning" "frontend" {
+  bucket = aws_s3_bucket.frontend.id
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
 resource "aws_cloudfront_origin_access_control" "frontend" {
   name                              = "patient-deid-frontend-oac"
   origin_access_control_origin_type = "s3"
@@ -66,6 +76,19 @@ resource "aws_s3_bucket_policy" "frontend" {
         Resource  = "${aws_s3_bucket.frontend.arn}/*"
         Condition = {
           StringEquals = { "AWS:SourceArn" = aws_cloudfront_distribution.frontend.arn }
+        }
+      },
+      {
+        Sid       = "DenyInsecureTransport"
+        Effect    = "Deny"
+        Principal = "*"
+        Action    = "s3:*"
+        Resource = [
+          aws_s3_bucket.frontend.arn,
+          "${aws_s3_bucket.frontend.arn}/*",
+        ]
+        Condition = {
+          Bool = { "aws:SecureTransport" = "false" }
         }
       }
     ]
