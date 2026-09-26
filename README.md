@@ -38,7 +38,7 @@ tracked in [`docs/decision-log.md`](docs/decision-log.md).
 |---|---|---|
 | 1. Requirements & repo | This doc set | ✅ Done |
 | 2. Application | Local `detect_phi()` + `redact()` proof of concept, no AWS infra | ✅ Done |
-| 3. Infrastructure | Terraform: S3, IAM, KMS, VPC | ✅ Done |
+| 3. Infrastructure | Terraform: S3, IAM, KMS | ✅ Done |
 | 3.5. Frontend / Operator UI (API Gateway upload endpoint, static site)| Not in original scope — added 2026-09-20 after discovering the CLI required source-code edits to process a new file, with no real operator-facing path | ✅ Done |
 | 4. CI/CD | Automated testing + deploy pipeline: GitHub Actions runs the test suite on every push/PR, and deploys the Lambdas (after tests pass) and the frontend from `main` via OIDC — no stored AWS keys | ✅ Done |
 | 5. Security hardening | Least-privilege IAM, storage protection (S3 versioning, TLS-only buckets), token lifetimes, audit logging | ✅ Done 2026-09-26 — versioning and TLS-only on every bucket, 1-hour refresh tokens, 1-day expiry of raw notes, CloudTrail logging of reads on the review queue |
@@ -57,7 +57,18 @@ aws configure  # if not already set up — needs Comprehend Medical access
 python -m src.deid.pipeline
 ```
 
-Run from the repo root. Tests:
+Run from the repo root. The local pipeline isn't a drop-in run anywhere else:
+it's tied to the AWS account this project was deployed in.
+
+- It uses a named AWS profile, `patient-deid`, not the default one, so plain
+  `aws configure` isn't enough; use `aws configure --profile patient-deid`.
+- It encrypts the review queue with this deployment's own KMS key
+  (`REVIEW_ARTIFACTS_KMS_KEY_ID` in `src/deid/review_cli.py`). In another
+  account, apply the Terraform and point that constant at your own key first.
+- It calls Comprehend Medical live, which bills the account, and it only
+  processes the fixed sample note, `tests/fixtures/sample_note.txt`.
+
+Tests:
 
 ```bash
 python -m pytest            # offline and free
