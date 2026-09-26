@@ -78,12 +78,18 @@ comment in cognito.tf.
 found no drift in any IAM policy; this pass's grep for
 s3:GetObjectVersion found nothing either. No further IAM changes.
 
-**Status: written, fmt/validate clean, not yet planned or applied.**
-Phase 5 closes once (1) this is applied and a second terraform plan
-straight afterwards shows "No changes", especially on cloudtrail_logs'
-delete-marker rule; and (2) the upload endpoint's validation, still
+**Upload validation now exercised live (2026-09-26).** Closes the
 "not yet exercised against the live endpoint with an actual bad
-request", is checked live with one deliberately bad request.
+request" note on the upload-validation entry below. Signed in as an
+operator and sent four bad requests to the live POST /upload from the
+frontend's own origin: a non-JSON body, non-string content, whitespace-
+only content, and 20,001 characters. All four came back 400 -- none
+reached S3 as a 202 or failed as a 500.
+
+**Status: written, fmt/validate clean, not yet planned or applied.**
+Phase 5 closes once this is applied and a second terraform plan
+straight afterwards shows "No changes", especially on cloudtrail_logs'
+delete-marker rule.
 
 ## CloudTrail data-event logging added for review-artifacts, closing
 ## the deferred gap from the hardening pass
