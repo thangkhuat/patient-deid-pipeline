@@ -69,6 +69,15 @@ resource "aws_kms_key" "redacted_output" {
         Resource  = "*"
       },
       {
+        # Presigned URLs from GET /notes/{note_id} are signed as this role,
+        # so the Operator's download decrypts under it too.
+        Sid       = "AllowUploadBackendDecrypt"
+        Effect    = "Allow"
+        Principal = { AWS = aws_iam_role.upload_backend.arn }
+        Action    = ["kms:Decrypt", "kms:DescribeKey"]
+        Resource  = "*"
+      },
+      {
         Sid       = "AllowOperatorDecrypt"
         Effect    = "Allow"
         Principal = { AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:user/${var.operator_user_name}" }

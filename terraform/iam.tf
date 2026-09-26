@@ -79,6 +79,22 @@ resource "aws_iam_role_policy" "upload_backend_write_input_notes" {
   })
 }
 
+# GET /notes/{note_id}: HeadObject to check the note is ready, then a
+# presigned GetObject URL signed with this role's credentials. No
+# s3:ListBucket on purpose -- the role only ever needs keys it was handed,
+# never an enumeration of them. Decrypt is granted in the redacted_output
+# key policy (kms.tf), same as every other decrypt in this project.
+resource "aws_iam_role_policy" "upload_backend_read_redacted_output" {
+  name = "read-redacted-output"
+  role = aws_iam_role.upload_backend.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      { Effect = "Allow", Action = "s3:GetObject", Resource = "${aws_s3_bucket.redacted_output.arn}/*" },
+    ]
+  })
+}
+
 resource "aws_iam_role_policy" "pipeline_lambda_logging" {
   name = "write-logs"
   role = aws_iam_role.pipeline_lambda.id

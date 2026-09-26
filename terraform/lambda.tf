@@ -65,7 +65,8 @@ resource "aws_lambda_function" "upload_backend" {
 
   environment {
     variables = {
-      INPUT_NOTES_BUCKET = aws_s3_bucket.input_notes.bucket
+      INPUT_NOTES_BUCKET     = aws_s3_bucket.input_notes.bucket
+      REDACTED_OUTPUT_BUCKET = aws_s3_bucket.redacted_output.bucket
     }
   }
 
