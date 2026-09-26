@@ -166,8 +166,8 @@ resource "aws_s3_bucket_policy" "review_artifacts" {
 }
 
 # Expires noncurrent versions after 30 days, so a deleted note's PHI doesn't
-# linger indefinitely as an old version. The window is recorded in
-# decision-log.md.
+# linger indefinitely as an old version, and (input_notes only) current raw
+# notes after 1 day. Both windows are recorded in decision-log.md.
 resource "aws_s3_bucket_lifecycle_configuration" "input_notes" {
   bucket = aws_s3_bucket.input_notes.id
 

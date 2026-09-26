@@ -2,6 +2,89 @@
 
 Newest first. Each entry: decision, rationale, alternatives considered.
 
+## Security-hardening pass 2: cloudtrail-logs hardened, raw notes
+## expire after 1 day, Cognito auth flow kept on purpose
+
+*2026-09-26.*
+
+Closes the items left open by pass 1 and the CloudTrail entry below.
+Terraform only, on security-hardening-pass-2.
+
+**cloudtrail-logs brought up to the same baseline as every other
+bucket:** versioning, a DenyInsecureTransport statement, and the same
+two-rule lifecycle split (30-day noncurrent expiry, expired delete
+markers as a separate rule). The TLS deny went into the *existing*
+bucket policy, as a third statement beside CloudTrail's two grants. A
+bucket has exactly one policy, so a second aws_s3_bucket_policy
+resource would have replaced those grants and silently stopped log
+delivery -- the one failure mode here that would look fine in plan.
+
+**Current CloudTrail logs are kept indefinitely -- a choice, not an
+omission.** Only noncurrent versions expire. The logs are the audit
+trail for who read what in review_artifacts; expiring them would
+quietly shorten how far back that question can be answered. They hold
+access metadata (principal, object key, time), not PHI, and at this
+volume storage is negligible. Revisit if a retention requirement is
+ever stated.
+
+**input_notes: current raw notes expire after 1 day.** Closes the
+Phase 3 "short-retention lifecycle policy, not yet implemented" gap
+that pass 1 explicitly left open. The raw note has served its whole
+purpose seconds after upload, once pipeline_lambda processes it, so 1
+day is generous rather than aggressive. A third rule on the existing
+lifecycle configuration, not a new resource -- a bucket has one
+lifecycle configuration. Review_artifacts is deliberately excluded: it
+is the review queue itself, not a transient input.
+
+Because the bucket is versioned, expiry adds a delete marker and makes
+the note noncurrent rather than erasing it; the existing 30-day
+noncurrent rule purges the bytes. Until then the old version is inert
+to this project's own roles: no Terraform-managed identity holds
+s3:GetObjectVersion on the bucket (checked across terraform/, not
+assumed). An account admin acting outside those roles still could, the
+same caveat pass 1 recorded for s3:DeleteObjectVersion. S3 also rounds
+lifecycle expiry up to the next midnight UTC and applies it
+asynchronously, so "1 day" means roughly 1-2 in practice.
+
+Tradeoffs accepted:
+- **No reprocessing after ~1 day.** Rewriting a note's review artifacts
+  needs the raw note, which by then no role can read.
+- **A failed note is lost after ~1 day.** pipeline_lambda has no
+  on-failure destination or DLQ, so a note that fails every async retry
+  leaves only a CloudWatch error behind -- and now its input expires
+  too. Not fixed here; noted as the natural next item if this ever
+  handles real volume.
+
+Alternatives considered:
+- **7 or 30 days.** More room to reprocess or recover a failed note,
+  but raw PHI would sit readable for a week or a month for no purpose
+  the design actually has.
+- **Delete from pipeline_lambda after processing.** Tighter, but needs
+  s3:DeleteObject on the pipeline role and deletes even on a partial
+  failure. Lifecycle keeps the pipeline role read-only on input_notes.
+
+**Cognito: ALLOW_USER_SRP_AUTH kept, deliberately.** Pass 1 left open
+whether explicit_auth_flows could be reduced, possibly to empty. It
+can't, usefully: AWS's CreateUserPoolClient reference states that if
+ExplicitAuthFlows isn't specified, the client supports
+ALLOW_REFRESH_TOKEN_AUTH, ALLOW_USER_SRP_AUTH and ALLOW_CUSTOM_AUTH.
+Emptying the list would at best be a no-op and at worst re-enable two
+flows pass 1 removed or never had. One explicit flow is the narrowest
+setting that doesn't fall back to that default. The flow stays unused
+by the app and still requires the pool's mandatory MFA. Recorded as a
+comment in cognito.tf.
+
+**Least-privilege IAM: counted done on pass 1's review.** That review
+found no drift in any IAM policy; this pass's grep for
+s3:GetObjectVersion found nothing either. No further IAM changes.
+
+**Status: written, fmt/validate clean, not yet planned or applied.**
+Phase 5 closes once (1) this is applied and a second terraform plan
+straight afterwards shows "No changes", especially on cloudtrail_logs'
+delete-marker rule; and (2) the upload endpoint's validation, still
+"not yet exercised against the live endpoint with an actual bad
+request", is checked live with one deliberately bad request.
+
 ## CloudTrail data-event logging added for review-artifacts, closing
 ## the deferred gap from the hardening pass
 

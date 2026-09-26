@@ -41,7 +41,7 @@ tracked in [`docs/decision-log.md`](docs/decision-log.md).
 | 3. Infrastructure | Terraform: S3, IAM, KMS, VPC | ✅ Done |
 | 3.5. Frontend / Operator UI (API Gateway upload endpoint, static site)| Not in original scope — added 2026-09-20 after discovering the CLI required source-code edits to process a new file, with no real operator-facing path | ✅ Done |
 | 4. CI/CD | Automated testing + deploy pipeline: GitHub Actions runs the test suite on every push/PR, and deploys the Lambdas (after tests pass) and the frontend from `main` via OIDC — no stored AWS keys | ✅ Done |
-| 5. Security hardening | Least-privilege IAM, storage protection (S3 versioning, TLS-only buckets), token lifetimes, audit logging | 🚧 In progress — pass 1 (versioning, TLS-only buckets, Cognito token lifetime) done 2026-09-26; CloudTrail logging of GetObject reads on the review queue live 2026-09-26 |
+| 5. Security hardening | Least-privilege IAM, storage protection (S3 versioning, TLS-only buckets), token lifetimes, audit logging | 🚧 In progress — pass 1 (versioning, TLS-only buckets, Cognito token lifetime) done 2026-09-26; CloudTrail logging of GetObject reads on the review queue live 2026-09-26; pass 2 (logs-bucket hardening, 1-day raw-note expiry) written, not yet applied |
 
 ## Docs
 

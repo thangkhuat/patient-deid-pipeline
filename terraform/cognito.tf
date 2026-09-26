@@ -58,6 +58,11 @@ resource "aws_cognito_user_pool_client" "frontend" {
     "https://d2tno7uvqes2o4.cloudfront.net/review.html",
   ]
 
+  # Unused by this app (the browser only uses the Hosted UI's code grant;
+  # review_cli.py uses IAM keys), but deliberately kept rather than removed:
+  # if ExplicitAuthFlows is left unset, AWS defaults the client to
+  # ALLOW_REFRESH_TOKEN_AUTH + ALLOW_USER_SRP_AUTH + ALLOW_CUSTOM_AUTH. One
+  # explicit flow is narrower than the default, not wider.
   explicit_auth_flows = ["ALLOW_USER_SRP_AUTH"]
 
   access_token_validity  = 1
