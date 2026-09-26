@@ -27,4 +27,4 @@ review-backend-package/
 *.zip
 
 # Repomix 
-repomix-output.md
+repomix*
