@@ -2,6 +2,44 @@
 
 Newest first. Each entry: decision, rationale, alternatives considered.
 
+## Phase 5 closed: security hardening
+
+*2026-09-26.*
+
+Every item in Phase 5's stated scope -- least-privilege IAM, storage
+protection, token lifetimes, audit logging -- is now in place and
+confirmed live, not just written:
+
+- **Least-privilege IAM:** pass 1's layer-by-layer review found no
+  drift in any policy; pass 2 found no identity holding
+  s3:GetObjectVersion on input_notes.
+- **Storage protection:** all five buckets versioned and TLS-only.
+  Noncurrent versions expire after 30 days on the three buckets that
+  hold PHI or audit data; current raw notes expire after 1 day.
+- **Token lifetimes:** refresh tokens cut from 30 days to 1 hour;
+  explicit_auth_flows kept at one flow on purpose, since an empty list
+  defaults wider.
+- **Audit logging:** CloudTrail records GetObject reads on
+  review_artifacts, verified live with a reviewer account (delivered
+  within 5 minutes).
+
+Also closed along the way: upload validation, previously tested only
+offline, rejected four deliberately bad requests with 400s against the
+live endpoint.
+
+Both hardening passes were applied by hand and followed by a second terraform plan
+showing "No changes", so the lifecycle split rules are confirmed to
+persist on every bucket that has them.
+
+**Open after this phase, deliberately -- not hardening gaps:**
+- pipeline_lambda has no on-failure destination. With 1-day raw-note
+  expiry, a note that fails every async retry is lost, leaving only a
+  CloudWatch error. The natural next item if this handles real volume.
+- Raw notes can't be reprocessed after ~1 day (pass 2 tradeoff).
+- The detection-side limits recorded elsewhere are unchanged: the phone
+  backstop covers measured AU mobile formats, not the US-centric bias
+  underneath, and ADDRESS false positives are accepted as noise.
+
 ## Security-hardening pass 2: cloudtrail-logs hardened, raw notes
 ## expire after 1 day, Cognito auth flow kept on purpose
 
@@ -86,10 +124,15 @@ frontend's own origin: a non-JSON body, non-string content, whitespace-
 only content, and 20,001 characters. All four came back 400 -- none
 reached S3 as a 202 or failed as a 500.
 
-**Status: written, fmt/validate clean, not yet planned or applied.**
-Phase 5 closes once this is applied and a second terraform plan
-straight afterwards shows "No changes", especially on cloudtrail_logs'
-delete-marker rule.
+**Status: applied 2026-09-26, and a second terraform plan straight
+afterwards showed "No changes".** Terraform state confirms each piece
+as written: versioning Enabled on cloudtrail-logs; its bucket policy
+holding all three statements (CloudTrail's two grants survived);
+lifecycle stored as two separate rules on cloudtrail-logs and three on
+input_notes, with expire-current-raw-notes at days = 1; Cognito still
+["ALLOW_USER_SRP_AUTH"]. The clean second plan shows the split-rule
+form persisted on this bucket too, rather than hitting the provider
+drift it guards against.
 
 ## CloudTrail data-event logging added for review-artifacts, closing
 ## the deferred gap from the hardening pass
