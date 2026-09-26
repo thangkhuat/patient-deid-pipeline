@@ -179,12 +179,17 @@ resource "aws_s3_bucket_lifecycle_configuration" "input_notes" {
     id     = "expire-noncurrent-versions"
     status = "Enabled"
     filter {}
-
     noncurrent_version_expiration {
       noncurrent_days = 30
     }
+  }
 
-    # Once the old versions are gone, remove the delete marker left behind.
+  # Kept as a separate rule from noncurrent expiry. Behaviour is the same
+  # either way; the split avoids any provider drift on combined rules.
+  rule {
+    id     = "remove-expired-delete-markers"
+    status = "Enabled"
+    filter {}
     expiration {
       expired_object_delete_marker = true
     }
@@ -200,11 +205,16 @@ resource "aws_s3_bucket_lifecycle_configuration" "review_artifacts" {
     id     = "expire-noncurrent-versions"
     status = "Enabled"
     filter {}
-
     noncurrent_version_expiration {
       noncurrent_days = 30
     }
+  }
 
+  # Separate rule for the same reason as input_notes above.
+  rule {
+    id     = "remove-expired-delete-markers"
+    status = "Enabled"
+    filter {}
     expiration {
       expired_object_delete_marker = true
     }

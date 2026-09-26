@@ -157,9 +157,10 @@ pass that tracks position rather than mutating the string in place.
 
 ## Explicitly out of scope for this phase
 
-- Terraform / AWS infrastructure (Phase 2)
-- CI/CD pipeline (Phase 3)
-- Security hardening beyond "no real PHI, no persisted mapping" (Phase 4)
+- Terraform / AWS infrastructure (Phase 3, since done)
+- CI/CD pipeline (Phase 4, since done)
+- Security hardening beyond "no real PHI, no persisted mapping" (Phase 5,
+  in progress)
 
 ## Testing requirements
 
