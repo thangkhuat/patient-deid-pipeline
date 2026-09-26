@@ -2,6 +2,138 @@
 
 Newest first. Each entry: decision, rationale, alternatives considered.
 
+## Phase 5 closed: security hardening
+
+*2026-09-26.*
+
+Every item in Phase 5's stated scope -- least-privilege IAM, storage
+protection, token lifetimes, audit logging -- is now in place and
+confirmed live, not just written:
+
+- **Least-privilege IAM:** pass 1's layer-by-layer review found no
+  drift in any policy; pass 2 found no identity holding
+  s3:GetObjectVersion on input_notes.
+- **Storage protection:** all five buckets versioned and TLS-only.
+  Noncurrent versions expire after 30 days on the three buckets that
+  hold PHI or audit data; current raw notes expire after 1 day.
+- **Token lifetimes:** refresh tokens cut from 30 days to 1 hour;
+  explicit_auth_flows kept at one flow on purpose, since an empty list
+  defaults wider.
+- **Audit logging:** CloudTrail records GetObject reads on
+  review_artifacts, verified live with a reviewer account (delivered
+  within 5 minutes).
+
+Also closed along the way: upload validation, previously tested only
+offline, rejected four deliberately bad requests with 400s against the
+live endpoint.
+
+Both hardening passes were applied by hand and followed by a second terraform plan
+showing "No changes", so the lifecycle split rules are confirmed to
+persist on every bucket that has them.
+
+**Open after this phase, deliberately -- not hardening gaps:**
+- pipeline_lambda has no on-failure destination. With 1-day raw-note
+  expiry, a note that fails every async retry is lost, leaving only a
+  CloudWatch error. The natural next item if this handles real volume.
+- Raw notes can't be reprocessed after ~1 day (pass 2 tradeoff).
+- The detection-side limits recorded elsewhere are unchanged: the phone
+  backstop covers measured AU mobile formats, not the US-centric bias
+  underneath, and ADDRESS false positives are accepted as noise.
+
+## Security-hardening pass 2: cloudtrail-logs hardened, raw notes
+## expire after 1 day, Cognito auth flow kept on purpose
+
+*2026-09-26.*
+
+Closes the items left open by pass 1 and the CloudTrail entry below.
+Terraform only, on security-hardening-pass-2.
+
+**cloudtrail-logs brought up to the same baseline as every other
+bucket:** versioning, a DenyInsecureTransport statement, and the same
+two-rule lifecycle split (30-day noncurrent expiry, expired delete
+markers as a separate rule). The TLS deny went into the *existing*
+bucket policy, as a third statement beside CloudTrail's two grants. A
+bucket has exactly one policy, so a second aws_s3_bucket_policy
+resource would have replaced those grants and silently stopped log
+delivery -- the one failure mode here that would look fine in plan.
+
+**Current CloudTrail logs are kept indefinitely -- a choice, not an
+omission.** Only noncurrent versions expire. The logs are the audit
+trail for who read what in review_artifacts; expiring them would
+quietly shorten how far back that question can be answered. They hold
+access metadata (principal, object key, time), not PHI, and at this
+volume storage is negligible. Revisit if a retention requirement is
+ever stated.
+
+**input_notes: current raw notes expire after 1 day.** Closes the
+Phase 3 "short-retention lifecycle policy, not yet implemented" gap
+that pass 1 explicitly left open. The raw note has served its whole
+purpose seconds after upload, once pipeline_lambda processes it, so 1
+day is generous rather than aggressive. A third rule on the existing
+lifecycle configuration, not a new resource -- a bucket has one
+lifecycle configuration. Review_artifacts is deliberately excluded: it
+is the review queue itself, not a transient input.
+
+Because the bucket is versioned, expiry adds a delete marker and makes
+the note noncurrent rather than erasing it; the existing 30-day
+noncurrent rule purges the bytes. Until then the old version is inert
+to this project's own roles: no Terraform-managed identity holds
+s3:GetObjectVersion on the bucket (checked across terraform/, not
+assumed). An account admin acting outside those roles still could, the
+same caveat pass 1 recorded for s3:DeleteObjectVersion. S3 also rounds
+lifecycle expiry up to the next midnight UTC and applies it
+asynchronously, so "1 day" means roughly 1-2 in practice.
+
+Tradeoffs accepted:
+- **No reprocessing after ~1 day.** Rewriting a note's review artifacts
+  needs the raw note, which by then no role can read.
+- **A failed note is lost after ~1 day.** pipeline_lambda has no
+  on-failure destination or DLQ, so a note that fails every async retry
+  leaves only a CloudWatch error behind -- and now its input expires
+  too. Not fixed here; noted as the natural next item if this ever
+  handles real volume.
+
+Alternatives considered:
+- **7 or 30 days.** More room to reprocess or recover a failed note,
+  but raw PHI would sit readable for a week or a month for no purpose
+  the design actually has.
+- **Delete from pipeline_lambda after processing.** Tighter, but needs
+  s3:DeleteObject on the pipeline role and deletes even on a partial
+  failure. Lifecycle keeps the pipeline role read-only on input_notes.
+
+**Cognito: ALLOW_USER_SRP_AUTH kept, deliberately.** Pass 1 left open
+whether explicit_auth_flows could be reduced, possibly to empty. It
+can't, usefully: AWS's CreateUserPoolClient reference states that if
+ExplicitAuthFlows isn't specified, the client supports
+ALLOW_REFRESH_TOKEN_AUTH, ALLOW_USER_SRP_AUTH and ALLOW_CUSTOM_AUTH.
+Emptying the list would at best be a no-op and at worst re-enable two
+flows pass 1 removed or never had. One explicit flow is the narrowest
+setting that doesn't fall back to that default. The flow stays unused
+by the app and still requires the pool's mandatory MFA. Recorded as a
+comment in cognito.tf.
+
+**Least-privilege IAM: counted done on pass 1's review.** That review
+found no drift in any IAM policy; this pass's grep for
+s3:GetObjectVersion found nothing either. No further IAM changes.
+
+**Upload validation now exercised live (2026-09-26).** Closes the
+"not yet exercised against the live endpoint with an actual bad
+request" note on the upload-validation entry below. Signed in as an
+operator and sent four bad requests to the live POST /upload from the
+frontend's own origin: a non-JSON body, non-string content, whitespace-
+only content, and 20,001 characters. All four came back 400 -- none
+reached S3 as a 202 or failed as a 500.
+
+**Status: applied 2026-09-26, and a second terraform plan straight
+afterwards showed "No changes".** Terraform state confirms each piece
+as written: versioning Enabled on cloudtrail-logs; its bucket policy
+holding all three statements (CloudTrail's two grants survived);
+lifecycle stored as two separate rules on cloudtrail-logs and three on
+input_notes, with expire-current-raw-notes at days = 1; Cognito still
+["ALLOW_USER_SRP_AUTH"]. The clean second plan shows the split-rule
+form persisted on this bucket too, rather than hitting the provider
+drift it guards against.
+
 ## CloudTrail data-event logging added for review-artifacts, closing
 ## the deferred gap from the hardening pass
 
@@ -65,13 +197,19 @@ already fully attributable, since pipeline_lambda is the only identity
 that ever writes there, so logging it would add cost without adding
 any real accountability value.
 
-**Status: designed and plan-reviewed, not yet applied.** terraform plan
-shows 4 to add (the logs bucket, its public access block, its bucket
-policy, and the trail itself) -- not yet run through apply. The new
-cloudtrail-logs bucket's own hardening (versioning, TLS-deny, lifecycle)
-is the immediate next step once this is confirmed live, so it doesn't
-sit as the one under-hardened bucket in an otherwise consistently
-hardened system.
+**Status: applied and confirmed working live (2026-09-26).** terraform
+plan showed 4 to add (the logs bucket, its public access block, its
+bucket policy, and the trail itself), and apply created them. Tested
+live end to end with a real reviewer account: viewing a review file
+as that reviewer produced a GetObject log entry, delivered to the
+cloudtrail-logs bucket within 5 minutes of the read -- within the delay
+AWS documents for CloudTrail delivery, so logs are near-real-time, not
+instant. The
+chicken-and-egg ordering above holds in practice, not just in the plan.
+Still open: the new cloudtrail-logs bucket's own hardening (versioning,
+TLS-deny, lifecycle) is the immediate next step, so it doesn't sit as
+the one under-hardened bucket in an otherwise consistently hardened
+system.
 
 ## Security-hardening pass 1: versioning, TLS-only buckets, Cognito
 ## token lifetime

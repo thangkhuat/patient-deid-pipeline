@@ -39,9 +39,60 @@ resource "aws_s3_bucket_policy" "cloudtrail_logs" {
             "aws:SourceArn" = local.cloudtrail_arn
           }
         }
+      },
+      # Same TLS-only deny as the other buckets. It lives in this policy
+      # rather than a separate aws_s3_bucket_policy: a bucket has exactly one
+      # policy, so a second resource would overwrite CloudTrail's grants above.
+      {
+        Sid       = "DenyInsecureTransport"
+        Effect    = "Deny"
+        Principal = "*"
+        Action    = "s3:*"
+        Resource = [
+          aws_s3_bucket.cloudtrail_logs.arn,
+          "${aws_s3_bucket.cloudtrail_logs.arn}/*",
+        ]
+        Condition = {
+          Bool = { "aws:SecureTransport" = "false" }
+        }
       }
     ]
   })
+}
+
+# Versioning and lifecycle match the other buckets in s3.tf.
+resource "aws_s3_bucket_versioning" "cloudtrail_logs" {
+  bucket = aws_s3_bucket.cloudtrail_logs.id
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "cloudtrail_logs" {
+  bucket = aws_s3_bucket.cloudtrail_logs.id
+
+  depends_on = [aws_s3_bucket_versioning.cloudtrail_logs]
+
+  rule {
+    id     = "expire-noncurrent-versions"
+    status = "Enabled"
+    filter {}
+    noncurrent_version_expiration {
+      noncurrent_days = 30
+    }
+  }
+
+  # Separate rule, matching input_notes and review_artifacts in s3.tf:
+  # combining this with noncurrent expiry in one rule is reported to drift
+  # in the AWS provider (the stored config doesn't persist as written).
+  rule {
+    id     = "remove-expired-delete-markers"
+    status = "Enabled"
+    filter {}
+    expiration {
+      expired_object_delete_marker = true
+    }
+  }
 }
 
 resource "aws_cloudtrail" "review_artifacts_access" {
