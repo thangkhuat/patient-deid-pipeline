@@ -173,6 +173,13 @@ def test_handler_decrypts_one_review(fake_s3):
     }]
 
 
+def test_handler_responses_declare_json_content_type(fake_s3):
+    ok = handler(make_event("GET /reviews", "[Reviewers]"), None)
+    denied = handler(make_event("GET /reviews", "[Operators]"), None)
+    for response in (ok, denied):
+        assert response["headers"]["Content-Type"] == "application/json"
+
+
 def test_handler_returns_404_for_missing_key(fake_s3):
     response = handler(make_event("GET /reviews/{key}", "[Reviewers]", key="nope.json"), None)
     assert response["statusCode"] == 404

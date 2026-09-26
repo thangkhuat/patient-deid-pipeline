@@ -2,6 +2,143 @@
 
 Newest first. Each entry: decision, rationale, alternatives considered.
 
+## Security-hardening pass 1: versioning, TLS-only buckets, Cognito
+## token lifetime
+
+*2026-09-26.*
+
+First systematic security review of this project, done layer by layer
+against the actual current codebase rather than from memory -- IAM,
+KMS, S3, Cognito, API Gateway, GitHub OIDC, and the Lambda handlers.
+Most of what exists checked out clean: no drift in any IAM policy, all
+three KMS key policies still correctly split admin from use, every
+bucket still fully public-access-blocked, both review-facing routes
+still correctly Cognito-gated. The earlier wildcard `@*` sub-claim gap
+in github_oidc.tf was confirmed genuinely resolved, not just patched --
+both roles now carry real, verified numeric IDs.
+
+**Four real findings from that review, all fixed on
+security-hardening-pass-1.** The Terraform changes are applied; the
+review_backend change ships through CI when the branch merges to main,
+so until then the live Lambda still returns responses without the
+header.
+
+1. **S3 versioning, all four buckets.** Named explicitly because the
+   sync --delete decision (entry below) already stated frontend had "no
+   versioning to recover from" -- the same gap existed, for a different
+   reason, on the three PHI-adjacent buckets: no protection against an
+   accidental overwrite or delete. Once enabled, versioning can only be
+   suspended, never disabled again.
+2. **Deny non-TLS access, all four buckets.** New aws_s3_bucket_policy
+   resources for the three data buckets (none existed before); added as
+   a second statement alongside frontend's existing CloudFront OAC
+   grant, not a replacement. Every current caller already uses TLS:
+   the Lambdas, review_cli.py and CI all go through AWS SDKs or the
+   CLI, and nothing uses presigned URLs or plain-HTTP endpoints.
+   **Coupling worth knowing:** frontend's statement is safe only because
+   the distribution sets viewer_protocol_policy = "redirect-to-https".
+   CloudFront reaches an S3 origin with whatever protocol the viewer
+   used, so changing that to "allow-all" would make every plain-HTTP
+   page request fail with a 403 from S3.
+3. **Cognito token lifetime tightened** -- see below; the first attempt
+   at this fix was wrong.
+4. **review_backend._response() now sets Content-Type: application/json**,
+   matching upload_handler's existing behaviour. Covered by a new test
+   checking both a 200 and a 403 response, since both paths share the
+   same helper.
+
+**The Cognito fix, worth recording precisely because the first reasoning
+was wrong.** First pass: removed ALLOW_REFRESH_TOKEN_AUTH from
+explicit_auth_flows, reasoning that this stopped refresh tokens being
+issued and closed a real pathway for redeeming a captured one. Caught in
+review: explicit_auth_flows governs the InitiateAuth/AdminInitiateAuth
+API family only -- this app never calls that family at all, only ever
+the Hosted UI's authorization-code grant. So the change closed a door
+nobody was using. Confirmed directly against AWS's own documentation,
+quoted verbatim: "Users who sign in with an authorization code grant in
+managed login or through federation can always refresh their tokens
+from the token endpoint" -- unconditionally, regardless of
+explicit_auth_flows. The actual, effective fix, added once that was
+understood: refresh_token_validity, which governs token lifetime
+regardless of which grant obtained it. Reduced from the 30-day default
+to 1 hour -- a short value Cognito accepted without error; not verified
+as the platform's enforced floor, just confirmed short enough to serve
+the purpose. enable_token_revocation is set explicitly too: AWS already
+enables revocation by default on new app clients, so this records the
+choice in code rather than changing behaviour. Access and ID token
+validity were pinned to 1 hour in the same change -- AWS's existing
+defaults, so no behaviour change, but setting a token_validity_units
+block otherwise leaves the provider to fill in the other units, and
+pinning them keeps plans clean. The explicit_auth_flows change was kept
+anyway -- harmless, and correctly closes an unused pathway -- but the PR
+description was corrected to say so honestly rather than claim it as
+the fix.
+
+Separately identified, not yet acted on: ALLOW_USER_SRP_AUTH is the
+flow that's actually unused by this app (review_cli.py authenticates
+with IAM user keys, not Cognito; the browser only ever uses the Hosted
+UI). Worth a future look at whether explicit_auth_flows can be reduced
+further, possibly to an empty list -- not verified as valid, left as a
+follow-up rather than guessed at.
+
+**Noncurrent-version expiry: 30 days, on input_notes and
+review_artifacts only.** Versioning alone would have kept a deleted
+note's PHI content indefinitely as an old version; this closes that gap
+deliberately rather than leaving it as a silent side effect of turning
+versioning on. The number is a judgement call between two pulls, not a
+derived value in the way min_score is:
+
+- A longer window gives more time to notice an accidental delete or
+  overwrite and recover from it -- the whole reason versioning exists.
+- A shorter window cuts how long deleted PHI stays present and readable,
+  to anyone with the right access, as an old version. That cuts against
+  retaining PHI no longer than its purpose requires, and it can't be
+  shortened for a single object: no Terraform-managed identity holds
+  s3:DeleteObjectVersion, so a note deleted for erasure reasons lingers
+  for the full window (plus S3's own lag, typically up to a day) unless
+  an admin intervenes outside the normal roles.
+
+30 days sits between the two, favouring recovery margin. In normal
+operation no noncurrent versions are created at all -- uploads get a
+fresh UUID key, and review artifacts are only rewritten if a note is
+reprocessed -- so the window only ever applies to manual deletes and
+overwrites.
+
+Implementation notes: each lifecycle configuration depends_on its
+bucket's versioning resource, since nothing else orders them. Removing
+expired delete markers is a second rule in the same configuration
+rather than part of the noncurrent-expiry rule, as a precaution against
+a reported provider drift bug with the combined form; the split
+configuration was confirmed stable by a clean follow-up terraform plan
+("No changes") straight after apply. That shows the split form holds
+here, not that the combined form would have failed.
+
+Alternatives considered:
+- **7 days.** Still catches a same-week mistake and meaningfully cuts
+  how long deleted PHI lingers. Rejected in favour of a wider recovery
+  margin, since a missing note may only be noticed when something
+  downstream asks for it.
+- **No expiry.** Rejected: indefinite retention of deleted PHI, as a
+  side effect nobody chose.
+- **No versioning on the PHI buckets at all.** Rejected: leaves an
+  accidental delete permanently unrecoverable.
+- **Expiry on frontend and redacted_output too.** Not done: neither
+  holds raw PHI, and old versions cost negligible storage at this
+  scale. Their noncurrent versions are kept indefinitely.
+
+**Not what this closes:** the Phase 3 entry's "short-retention lifecycle
+policy, not yet implemented" for input_notes is a different thing. These
+rules expire only old versions. The *current* raw note in input_notes
+still never expires, so that gap stays open.
+
+**Known, deliberately deferred:** S3 data-event logging (CloudTrail) on
+review_artifacts, so an actual GetObject read of encrypted review
+content is individually logged, not just covered by generic
+management-plane logging. Real, meaningful gap given how much of this
+project's design rests on "who can decrypt what" -- but genuinely new
+scope (a new CloudTrail trail, ongoing cost), not a quick addition like
+everything else in this pass. Left as its own future decision.
+
 ## Phase 4 closed: Lambda code deploys from CI, gated on tests, through
 ## a third OIDC role
 

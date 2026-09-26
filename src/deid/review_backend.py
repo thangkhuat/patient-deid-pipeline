@@ -42,7 +42,11 @@ def is_reviewer(claims: dict) -> bool:
 
 
 def _response(status: int, body) -> dict:
-    return {"statusCode": status, "body": json.dumps(body)}
+    return {
+        "statusCode": status,
+        "headers": {"Content-Type": "application/json"},
+        "body": json.dumps(body),
+    }
 
 
 def handler(event, context):
