@@ -75,8 +75,8 @@ resource "aws_s3_bucket_public_access_block" "review_artifacts" {
 # overwrite and delete (including the delete markers `aws s3 sync --delete`
 # leaves on the frontend bucket) keeps the old version as a billed object.
 # Negligible at this project's scale, but a semi-permanent tradeoff, not a
-# free change. On input_notes and review_artifacts it also means a deleted
-# object's content persists as a noncurrent version until something expires it.
+# free change. On input_notes and review_artifacts, a deleted object's content
+# persists as a noncurrent version for 30 days (see the lifecycle rules below).
 resource "aws_s3_bucket_versioning" "input_notes" {
   bucket = aws_s3_bucket.input_notes.id
   versioning_configuration {
@@ -163,4 +163,50 @@ resource "aws_s3_bucket_policy" "review_artifacts" {
       }
     ]
   })
+}
+
+# Expires noncurrent versions after 30 days, so a deleted note's PHI doesn't
+# linger indefinitely as an old version. The window is recorded in
+# decision-log.md.
+resource "aws_s3_bucket_lifecycle_configuration" "input_notes" {
+  bucket = aws_s3_bucket.input_notes.id
+
+  # Noncurrent-version rules need versioning to exist first; nothing else
+  # tells Terraform to create them in that order.
+  depends_on = [aws_s3_bucket_versioning.input_notes]
+
+  rule {
+    id     = "expire-noncurrent-versions"
+    status = "Enabled"
+    filter {}
+
+    noncurrent_version_expiration {
+      noncurrent_days = 30
+    }
+
+    # Once the old versions are gone, remove the delete marker left behind.
+    expiration {
+      expired_object_delete_marker = true
+    }
+  }
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "review_artifacts" {
+  bucket = aws_s3_bucket.review_artifacts.id
+
+  depends_on = [aws_s3_bucket_versioning.review_artifacts]
+
+  rule {
+    id     = "expire-noncurrent-versions"
+    status = "Enabled"
+    filter {}
+
+    noncurrent_version_expiration {
+      noncurrent_days = 30
+    }
+
+    expiration {
+      expired_object_delete_marker = true
+    }
+  }
 }
