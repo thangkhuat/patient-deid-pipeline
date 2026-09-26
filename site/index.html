@@ -43,6 +43,9 @@
   .result.success { display: block; background: var(--success-bg); border: 1px solid var(--success-border); }
   .result.error { display: block; background: var(--error-bg); border: 1px solid var(--error-border); }
   .result code { background: rgba(0,0,0,0.06); padding: 1px 5px; border-radius: 4px; font-size: 0.85em; }
+  .result .status-line { margin-top: 8px; color: var(--muted); }
+  .result a.download { display: inline-block; margin-top: 10px; background: var(--primary); color: white; padding: 8px 14px; border-radius: 8px; font-weight: 600; text-decoration: none; }
+  .result a.download:hover { background: var(--primary-hover); }
   .logout-row { text-align: right; margin-bottom: 8px; }
   .logout-row button { width: auto; margin: 0; padding: 6px 12px; font-size: 0.8rem; background: var(--border); color: var(--muted); }
   .logout-row button:hover { background: #d1d5db; }
@@ -60,7 +63,7 @@
     <div id="appScreen" style="display:none;">
       <div class="logout-row"><button id="logoutBtn" type="button">Log out</button></div>
       <h1>Patient De-Identification Pipeline</h1>
-      <p class="subtitle">Submit clinical note text for automatic PHI redaction. Processing happens asynchronously -- this page confirms submission, not completion.</p>
+      <p class="subtitle">Submit clinical note text for automatic PHI redaction. Processing happens asynchronously -- this page will offer a download link once the redacted output is ready.</p>
 
       <div class="file-row">
         <label for="fileInput">Upload a .txt file, or paste text directly below</label>
@@ -81,7 +84,10 @@
 
 <script>
   const CHAR_LIMIT = 20000;
-  const UPLOAD_URL = "https://s91h2b7zm0.execute-api.ap-southeast-2.amazonaws.com/upload";
+  const API_BASE = "https://s91h2b7zm0.execute-api.ap-southeast-2.amazonaws.com";
+  const UPLOAD_URL = `${API_BASE}/upload`;
+  const POLL_INTERVAL_MS = 3000;
+  const POLL_TIMEOUT_MS = 5 * 60 * 1000;
   const COGNITO_DOMAIN = "https://patient-deid-auth.auth.ap-southeast-2.amazoncognito.com";
   const CLIENT_ID = "4bh30bntqhj8pho4ao9908ltir";
   const REDIRECT_URI = "https://d2tno7uvqes2o4.cloudfront.net";
@@ -204,12 +210,86 @@
     reader.readAsText(file);
   });
 
+  // --- Retrieval: poll GET /notes/{note_id} until a download link exists --
+  // 404 means "not ready yet" (the API deliberately doesn't distinguish
+  // "still processing" from "no such note"), so keep polling on 404 only.
+  let pollTimer = null;
+
+  function stopPolling() {
+    if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+  }
+
+  function showAccepted(noteId) {
+    result.className = "result success";
+    result.textContent = "";
+    result.append("Accepted for processing. Note ID: ");
+    const code = document.createElement("code");
+    code.textContent = noteId;
+    result.append(code);
+    const status = document.createElement("div");
+    status.className = "status-line";
+    status.id = "pollStatus";
+    status.textContent = "Waiting for redacted output...";
+    result.append(status);
+  }
+
+  function showDownload(url) {
+    const status = document.getElementById("pollStatus");
+    status.textContent = "Ready. This link expires in 5 minutes.";
+    const link = document.createElement("a");
+    link.className = "download";
+    link.href = url;
+    link.textContent = "Download redacted output";
+    link.rel = "noopener";
+    result.append(link);
+  }
+
+  function showError(message) {
+    result.className = "result error";
+    result.textContent = message;
+  }
+
+  function pollForNote(noteId, startedAt) {
+    pollTimer = setTimeout(async () => {
+      try {
+        const response = await fetch(`${API_BASE}/notes/${encodeURIComponent(noteId)}`, {
+          headers: { "Authorization": `Bearer ${getAccessToken()}` },
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          pollTimer = null;
+          showDownload(data.download_url);
+        } else if (response.status === 404) {
+          if (Date.now() - startedAt > POLL_TIMEOUT_MS) {
+            pollTimer = null;
+            showError(`Still not ready after 5 minutes -- processing may have failed. Note ID: ${noteId}`);
+          } else {
+            pollForNote(noteId, startedAt);
+          }
+        } else if (response.status === 401) {
+          stopPolling();
+          clearAccessToken();
+          showLogin();
+        } else {
+          const data = await response.json().catch(() => ({}));
+          pollTimer = null;
+          showError(data.error || "Could not check processing status.");
+        }
+      } catch (err) {
+        pollTimer = null;
+        showError("Network error -- could not reach the upload service.");
+      }
+    }, POLL_INTERVAL_MS);
+  }
+
   submitBtn.addEventListener("click", async () => {
     const content = textarea.value;
     if (!content || content.length > CHAR_LIMIT) return;
 
     submitBtn.disabled = true;
     submitBtn.textContent = "Submitting...";
+    stopPolling();
     result.className = "result";
     result.textContent = "";
 
@@ -225,8 +305,8 @@
       const data = await response.json();
 
       if (response.ok) {
-        result.className = "result success";
-        result.innerHTML = `Accepted for processing. Reference ID: <code>${data.id}</code>`;
+        showAccepted(data.note_id);
+        pollForNote(data.note_id, Date.now());
         textarea.value = "";
         fileInput.value = "";
         updateCharCount();

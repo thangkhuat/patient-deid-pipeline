@@ -54,6 +54,7 @@ originating hospital, not inside it.
 | FR-8 | System shall document known limitations (e.g. contextual re-identification risk) rather than implying full anonymity guarantees. |
 | FR-9 | System shall additionally redact `PROFESSION`-type entities as a deliberate extension beyond Safe Harbor's 18 categories. Rationale logged in `decision-log.md`. |
 | FR-10 | System may retain an internal review artifact holding encrypted content for entities scoring below the review threshold, readable only by a Reviewer who already holds source-note access. This artifact shall never be released downstream, and shall never store entity content as plaintext. Rationale logged in `decision-log.md`. |
+| FR-11 | System shall let an Operator retrieve the redacted output of a note they submitted, via a time-limited download link (5 minutes) issued only to an authenticated Operator. The redacted text shall not be returned inline, and the retrieval response shall not distinguish a note still processing from one that does not exist. Rationale logged in `decision-log.md`. |
 
 ## Success Criteria
 

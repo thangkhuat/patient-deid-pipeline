@@ -24,6 +24,16 @@ resource "aws_apigatewayv2_route" "upload" {
   authorizer_id      = aws_apigatewayv2_authorizer.cognito.id
 }
 
+# Same integration and authorizer as POST /upload: retrieval sits inside
+# the upload trust boundary, not beside it. See FR-11.
+resource "aws_apigatewayv2_route" "get_note" {
+  api_id             = aws_apigatewayv2_api.upload.id
+  route_key          = "GET /notes/{note_id}"
+  target             = "integrations/${aws_apigatewayv2_integration.upload.id}"
+  authorization_type = "JWT"
+  authorizer_id      = aws_apigatewayv2_authorizer.cognito.id
+}
+
 resource "aws_apigatewayv2_stage" "default" {
   api_id      = aws_apigatewayv2_api.upload.id
   name        = "$default"

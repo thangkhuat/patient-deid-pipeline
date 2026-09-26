@@ -2,6 +2,86 @@
 
 Newest first. Each entry: decision, rationale, alternatives considered.
 
+## Operator retrieval of redacted output: GET /notes/{note_id} returns a
+## 5-minute presigned URL (FR-11)
+
+*2026-09-27.*
+
+Closes a gap found in review: POST /upload returned 202 with nothing to
+check back against, and no identity the Operator could use had read
+access to redacted_output. The Operator could submit a note but never
+collect the result.
+
+**What was built:**
+- POST /upload now returns `{"status": "accepted", "note_id": "<uuid>"}`.
+  The ID is the bare UUID. The ".txt" is an input_notes storage detail
+  and is no longer exposed.
+- New route GET /notes/{note_id} on the existing HTTP API, served by
+  upload_backend (no new Lambda) and behind the **same Cognito JWT
+  authorizer as POST /upload**. The ID is checked against the exact
+  canonical UUID form before S3 is touched; anything else gets 400. The
+  handler HEADs `<uuid>.json` in redacted_output. Missing gives 404,
+  worded the same whether the note is still processing or never
+  existed, so polling can't confirm an ID was ever valid. Present gives
+  `{"download_url": ...}`, a presigned GetObject valid for 300 seconds.
+- upload_backend gains s3:GetObject on `redacted_output.arn/*`, plus
+  kms:Decrypt and DescribeKey in the redacted_output **key policy**. The
+  key policy names each principal and doesn't delegate to account IAM,
+  so an IAM-side KMS grant would do nothing. This matches how
+  review_backend gets decrypt on its key.
+- index.html shows the note ID, polls every 3 seconds for up to 5
+  minutes, and then shows a download link. It keeps the page's existing
+  error handling: 401 goes back to login, other non-2xx responses show
+  the API's `error`.
+
+**Presigned URL, not the redacted text returned inline.** The URL adds a
+small safety margin: a captured link stops working after 5 minutes,
+while captured response content never expires. The extra cost is
+negligible (one local signing operation, no extra S3 round trip before
+the download). It also keeps note content out of the Lambda response
+path entirely.
+
+**Not Cognito-gated with ownership tracking.** Checking that the
+requesting Operator is the one who submitted the note would mean storing
+a submitter-to-note mapping and checking it on every read. That is out of
+scope for this change. The route is Cognito-gated, so only a logged-in
+Operator can use it, but any logged-in Operator holding a note ID can
+fetch that note's redacted output. The ID is an unguessable UUIDv4 that
+is only ever returned to the submitter. The content is redacted output,
+already meant for release downstream (FR-5), so the exposure is the
+same as the redacted text itself.
+
+**Not direct S3 access for the Operator's own identity.** Operators are
+Cognito user pool users with no AWS credentials. Giving them direct S3
+reads would need a Cognito identity pool handing out temporary AWS
+credentials to browsers: a new trust relationship and more
+infrastructure than this feature needs. The existing
+`var.operator_user_name` IAM user with decrypt on this key is a
+testing/operator-access identity, not how Operators reach the system
+through the UI.
+
+**Deliberate details:**
+- **No s3:ListBucket.** The role only ever needs keys it was handed.
+  Without ListBucket, S3 answers a HEAD on a missing key with 403, not
+  404, so the handler treats 403 and 404 alike as "not available yet".
+  Any other S3 error is raised, not masked, so a real fault doesn't
+  look like a note that never finishes.
+  Trade-off: a genuine permission misconfiguration on GetObject would
+  also look like "still processing". The first live check after apply is
+  meant to catch that.
+- **SigV4 set explicitly** on the signing client. S3 rejects presigned
+  GETs of SSE-KMS objects signed any other way.
+- **Presigned-URL lifetime is capped by the signer's session.** The URL
+  is signed with the Lambda role's temporary credentials, which last
+  hours, so the 300-second ExpiresIn is the binding limit.
+- `Content-Disposition: attachment` is set on the URL so the link
+  downloads the JSON rather than rendering it in the tab.
+
+**Status: code, Terraform and tests written; fmt -check, validate and the
+offline suite pass. Not yet applied.** It still needs a terraform apply
+plus a live check: submit, poll, download, and confirm the link fails
+after 5 minutes.
+
 ## Phase 5 closed: security hardening
 
 *2026-09-26.*
